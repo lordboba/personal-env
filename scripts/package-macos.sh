@@ -10,12 +10,14 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DOWNLOADS_DIR="$ROOT_DIR/download-site/public/downloads"
-DOWNLOAD_ZIP="$DOWNLOADS_DIR/Personal-Env-macOS.zip"
+DOWNLOAD_DMG="$DOWNLOADS_DIR/Personal-Env-macOS.dmg"
+STALE_DOWNLOAD_ZIP="$DOWNLOADS_DIR/Personal-Env-macOS.zip"
+DMG_STAGING_DIR="$ROOT_DIR/dist/dmg"
 
 cd "$ROOT_DIR"
 swift build -c release --product "$EXECUTABLE_NAME"
 
-rm -rf "$APP_DIR"
+rm -rf "$APP_DIR" "$DMG_STAGING_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BUILD_DIR/$EXECUTABLE_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
@@ -55,8 +57,17 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-mkdir -p "$DOWNLOADS_DIR"
-ditto -c -k --norsrc --noextattr --keepParent "$APP_DIR" "$DOWNLOAD_ZIP"
+mkdir -p "$DOWNLOADS_DIR" "$DMG_STAGING_DIR"
+cp -R "$APP_DIR" "$DMG_STAGING_DIR/$APP_NAME.app"
+ln -s /Applications "$DMG_STAGING_DIR/Applications"
+rm -f "$DOWNLOAD_DMG" "$STALE_DOWNLOAD_ZIP"
+hdiutil create \
+  -volname "$APP_NAME" \
+  -srcfolder "$DMG_STAGING_DIR" \
+  -ov \
+  -format UDZO \
+  "$DOWNLOAD_DMG"
+rm -rf "$DMG_STAGING_DIR"
 
 echo "$APP_DIR"
-echo "$DOWNLOAD_ZIP"
+echo "$DOWNLOAD_DMG"

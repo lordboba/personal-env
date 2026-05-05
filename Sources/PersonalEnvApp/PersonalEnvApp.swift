@@ -84,21 +84,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createSampleVaultIfNeeded() async {
-        guard let service, state.vaults.isEmpty else { return }
-        do {
-            let vault = try await service.upsertVault(name: "Personal Coding", projectPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Code").path)
-            try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-••••••••••••", scope: "ai")
-            try await service.setVariable(vaultID: vault.id, key: "RESEND_API_KEY", value: "re_••••••••", scope: "email")
-            state = await service.snapshot()
-            duplicateHints = await service.duplicateHints()
-            selectedVaultID = vault.id
-            selectedVariableID = state.vaults.first { $0.id == vault.id }?.variables.first?.id
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     func createNewProject(name: String, parentDirectory: String) async {
         guard let service else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -990,12 +975,7 @@ private struct UploadVariableChoice: Identifiable, Hashable {
     let fileName: String
     let projectPath: String
     let key: String
-    let value: String
     let scope: String
-
-    var variable: EnvVariable {
-        EnvVariable(key: key, value: value, scope: scope)
-    }
 
     static func make(from files: [DetectedDotenvFile]) -> [UploadVariableChoice] {
         files.flatMap { file in
@@ -1005,7 +985,6 @@ private struct UploadVariableChoice: Identifiable, Hashable {
                     fileName: file.fileName,
                     projectPath: file.projectPath,
                     key: variable.key,
-                    value: variable.value,
                     scope: variable.scope
                 )
             }

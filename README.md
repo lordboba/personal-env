@@ -38,16 +38,17 @@ open "dist/Personal Env.app"
 ```
 
 The package script also writes the website download artifact to
-`download-site/public/downloads/Personal-Env-macOS.zip`, which is the file used
-by the production download CTA.
+`download-site/public/downloads/Personal-Env-macOS.dmg`, which is the file used
+by the production download CTA. The DMG contains `Personal Env.app` and an
+`Applications` symlink for the standard drag-to-Applications install flow.
 
-This repo uses a local `post-commit` hook to keep that ZIP fresh after commits:
+This repo uses a local `post-commit` hook to keep that DMG fresh after commits:
 
 ```sh
 git config --local core.hooksPath .githooks
 ```
 
-The hook rebuilds the macOS app package and stages the website ZIP for the next
+The hook rebuilds the macOS app package and stages the website DMG for the next
 commit if it changed.
 
 `swift run PersonalEnv` builds/runs the SwiftPM executable, but packaging is the

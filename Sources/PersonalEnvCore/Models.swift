@@ -92,35 +92,6 @@ public struct EnvVault: Identifiable, Codable, Equatable, Sendable {
         self.variables = variables
         self.updatedAt = updatedAt
     }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case name
-        case projectPath
-        case dotenvFileName
-        case variables
-        case updatedAt
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        projectPath = try container.decode(String.self, forKey: .projectPath)
-        dotenvFileName = try container.decodeIfPresent(String.self, forKey: .dotenvFileName)
-        variables = try container.decode([EnvVariable].self, forKey: .variables)
-        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(name, forKey: .name)
-        try container.encode(projectPath, forKey: .projectPath)
-        try container.encodeIfPresent(dotenvFileName, forKey: .dotenvFileName)
-        try container.encode(variables, forKey: .variables)
-        try container.encode(updatedAt, forKey: .updatedAt)
-    }
 }
 
 public struct DetectedDotenvFile: Identifiable, Equatable, Sendable {

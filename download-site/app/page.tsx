@@ -18,7 +18,7 @@ const secrets = [
   ["API_BASE_URL", "Development"],
 ];
 
-const downloadUrl = "/downloads/Personal-Env-macOS.zip";
+const downloadUrl = "/downloads/Personal-Env-macOS.dmg";
 
 export default function Home() {
   const defaultLight = {
