@@ -1,0 +1,253 @@
+import Foundation
+import CryptoKit
+
+public actor VaultService {
+    private let store: SecretStoring
+    private let authenticator: Authenticating
+    private var state: AppState
+
+    public init(store: SecretStoring = KeychainStore(), authenticator: Authenticating = LocalAuthenticator()) throws {
+        self.store = store
+        self.authenticator = authenticator
+        var loadedState = try store.loadState()
+        Self.hydrateLegacyInventoryIfNeeded(&loadedState)
+        self.state = loadedState
+    }
+
+    public func snapshot() -> AppState {
+        state
+    }
+
+    public func duplicateHints() -> [DuplicateHint] {
+        let usesBySecretID = Dictionary(grouping: state.projectSecretUses.compactMap { use -> (UUID, ProjectSecretUse)? in
+            guard let secretID = use.secretID else { return nil }
+            return (secretID, use)
+        }, by: { $0.0 }).mapValues { pairs in pairs.map(\.1) }
+
+        let secretsByKey = Dictionary(grouping: state.secrets, by: \.key)
+        return secretsByKey.compactMap { key, secrets in
+            guard secrets.count > 1 else { return nil }
+            let fingerprints = Set(secrets.map(\.valueFingerprint))
+            let projectPaths = Set(secrets.flatMap { secret in
+                usesBySecretID[secret.id]?.map(\.projectPath) ?? []
+            }).sorted()
+            return DuplicateHint(
+                key: key,
+                projectPaths: projectPaths,
+                fingerprintMatch: fingerprints.count == 1,
+                conflictState: fingerprints.count == 1 ? .sameValue : .conflictingValues
+            )
+        }
+        .sorted { lhs, rhs in lhs.key < rhs.key }
+    }
+
+    public func unlock(reason: String = "Unlock Personal Env to access your Keychain-backed environment variables.") async throws {
+        try await authenticator.unlock(reason: reason)
+    }
+
+    @discardableResult
+    public func upsertVault(name: String, projectPath: String, dotenvFileName: String? = nil) throws -> EnvVault {
+        if let index = state.vaults.firstIndex(where: { $0.projectPath == projectPath }) {
+            state.vaults[index].name = name
+            if let dotenvFileName {
+                state.vaults[index].dotenvFileName = dotenvFileName
+            }
+            state.vaults[index].updatedAt = Date()
+            try persist()
+            return state.vaults[index]
+        }
+        let vault = EnvVault(name: name, projectPath: projectPath, dotenvFileName: dotenvFileName)
+        state.vaults.append(vault)
+        try persist()
+        return vault
+    }
+
+    @discardableResult
+    public func createProjectVault(name: String, parentDirectory: String) throws -> EnvVault {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw PersonalEnvError.invalidRequest("Project name is required.")
+        }
+
+        let expandedParent = NSString(string: parentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
+        let parentURL = URL(fileURLWithPath: expandedParent, isDirectory: true)
+        let projectURL = parentURL.appendingPathComponent(trimmedName, isDirectory: true)
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: projectURL.path, isDirectory: &isDirectory) {
+            throw PersonalEnvError.invalidRequest("A folder already exists at \(projectURL.path).")
+        }
+
+        try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+        try DotenvCodec.render([]).write(to: projectURL.appendingPathComponent(DotenvCodec.projectFileName), atomically: true, encoding: .utf8)
+
+        return try upsertVault(name: trimmedName, projectPath: projectURL.path, dotenvFileName: DotenvCodec.projectFileName)
+    }
+
+    public func importDotenv(_ text: String, vaultID: UUID, scope: String = "project") async throws {
+        try await unlock(reason: "Import environment variables into Apple Keychain.")
+        try importVariablesWithoutUnlock(DotenvCodec.parse(text, scope: scope), vaultID: vaultID)
+    }
+
+    public func importVariables(_ variables: [EnvVariable], vaultID: UUID) async throws {
+        try await unlock(reason: "Import environment variables into Apple Keychain.")
+        try importVariablesWithoutUnlock(variables, vaultID: vaultID)
+    }
+
+    public func importDetectedDotenvFiles(_ files: [DetectedDotenvFile], rootName: String? = nil) async throws {
+        try await unlock(reason: "Import environment variables into Apple Keychain.")
+        for file in files {
+            let projectName = rootNameForFile(file, fallback: rootName)
+            let vault = try upsertVault(name: projectName, projectPath: file.projectPath, dotenvFileName: file.fileName)
+            try importVariablesWithoutUnlock(file.variables, vaultID: vault.id, dotenvFileName: file.fileName, source: file.path)
+        }
+    }
+
+    private func importVariablesWithoutUnlock(_ variables: [EnvVariable], vaultID: UUID) throws {
+        try importVariablesWithoutUnlock(variables, vaultID: vaultID, dotenvFileName: nil, source: nil)
+    }
+
+    private func importVariablesWithoutUnlock(_ variables: [EnvVariable], vaultID: UUID, dotenvFileName: String?, source: String?) throws {
+        guard let index = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
+            throw PersonalEnvError.vaultNotFound
+        }
+        for variable in variables {
+            let trackedVariable = variableWithTrackedSecret(variable, vaultIndex: index, dotenvFileName: dotenvFileName, source: source)
+            if let existing = state.vaults[index].variables.firstIndex(where: { $0.key == trackedVariable.key }) {
+                state.vaults[index].variables[existing] = trackedVariable
+            } else {
+                state.vaults[index].variables.append(trackedVariable)
+            }
+        }
+        state.vaults[index].updatedAt = Date()
+        try persist()
+        try syncDotenvFileIfNeeded(vaultIndex: index)
+    }
+
+    public func setVariable(vaultID: UUID, key: String, value: String, scope: String = "project") async throws {
+        try await unlock(reason: "Store \(key) in Apple Keychain.")
+        guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
+            throw PersonalEnvError.vaultNotFound
+        }
+        let variable = variableWithTrackedSecret(EnvVariable(key: key, value: value, scope: scope), vaultIndex: vaultIndex, dotenvFileName: state.vaults[vaultIndex].dotenvFileName, source: "manual")
+        if let variableIndex = state.vaults[vaultIndex].variables.firstIndex(where: { $0.key == key }) {
+            state.vaults[vaultIndex].variables[variableIndex] = variable
+        } else {
+            state.vaults[vaultIndex].variables.append(variable)
+        }
+        state.vaults[vaultIndex].updatedAt = Date()
+        try persist()
+        try syncDotenvFileIfNeeded(vaultIndex: vaultIndex)
+    }
+
+    public func updateVariable(vaultID: UUID, variableID: UUID, key: String, value: String, scope: String = "project") async throws {
+        try await unlock(reason: "Update \(key) in Apple Keychain.")
+        guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
+            throw PersonalEnvError.vaultNotFound
+        }
+        guard let variableIndex = state.vaults[vaultIndex].variables.firstIndex(where: { $0.id == variableID }) else {
+            throw PersonalEnvError.variableNotFound(key)
+        }
+        let variable = variableWithTrackedSecret(EnvVariable(id: variableID, key: key, value: value, scope: scope), vaultIndex: vaultIndex, dotenvFileName: state.vaults[vaultIndex].dotenvFileName, source: "manual")
+        state.vaults[vaultIndex].variables[variableIndex] = variable
+        state.vaults[vaultIndex].updatedAt = Date()
+        try persist()
+        try syncDotenvFileIfNeeded(vaultIndex: vaultIndex)
+    }
+
+    public func exportDotenv(vaultID: UUID, keys: [String]? = nil) async throws -> String {
+        try await unlock(reason: "Export environment variables from Apple Keychain.")
+        guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
+            throw PersonalEnvError.vaultNotFound
+        }
+        let variables = filter(vault.variables, keys: keys)
+        return DotenvCodec.render(variables)
+    }
+
+    private func filter(_ variables: [EnvVariable], keys: [String]?) -> [EnvVariable] {
+        guard let keys, !keys.isEmpty else { return variables }
+        return variables.filter { keys.contains($0.key) }
+    }
+
+    private func persist() throws {
+        try store.saveState(state)
+    }
+
+    private static func hydrateLegacyInventoryIfNeeded(_ state: inout AppState) {
+        guard state.secrets.isEmpty, state.projectSecretUses.isEmpty else { return }
+        for vaultIndex in state.vaults.indices {
+            let fileName = state.vaults[vaultIndex].dotenvFileName ?? DotenvCodec.projectFileName
+            for variable in state.vaults[vaultIndex].variables {
+                let secret = SecretRecord(
+                    id: variable.id,
+                    key: variable.key,
+                    value: variable.value,
+                    scope: variable.scope,
+                    valueFingerprint: fingerprint(value: variable.value),
+                    source: "legacy",
+                    updatedAt: variable.updatedAt
+                )
+                state.secrets.append(secret)
+                state.projectSecretUses.append(ProjectSecretUse(
+                    projectPath: state.vaults[vaultIndex].projectPath,
+                    dotenvFileName: fileName,
+                    key: variable.key,
+                    secretID: secret.id
+                ))
+            }
+        }
+    }
+
+    private func variableWithTrackedSecret(_ variable: EnvVariable, vaultIndex: Int, dotenvFileName: String?, source: String?) -> EnvVariable {
+        let fingerprint = Self.fingerprint(value: variable.value)
+        let secret = SecretRecord(
+            id: variable.id,
+            key: variable.key,
+            value: variable.value,
+            scope: variable.scope,
+            valueFingerprint: fingerprint,
+            source: source,
+            updatedAt: variable.updatedAt
+        )
+        if let index = state.secrets.firstIndex(where: { $0.id == secret.id }) {
+            state.secrets[index] = secret
+        } else {
+            state.secrets.append(secret)
+        }
+
+        let vault = state.vaults[vaultIndex]
+        let fileName = dotenvFileName ?? vault.dotenvFileName ?? DotenvCodec.projectFileName
+        if let useIndex = state.projectSecretUses.firstIndex(where: {
+            $0.projectPath == vault.projectPath && $0.dotenvFileName == fileName && $0.key == variable.key
+        }) {
+            state.projectSecretUses[useIndex].secretID = secret.id
+            state.projectSecretUses[useIndex].lastSeenAt = Date()
+        } else {
+            state.projectSecretUses.append(ProjectSecretUse(projectPath: vault.projectPath, dotenvFileName: fileName, key: variable.key, secretID: secret.id))
+        }
+        return variable
+    }
+
+    private func rootNameForFile(_ file: DetectedDotenvFile, fallback: String?) -> String {
+        let projectName = URL(fileURLWithPath: file.projectPath).lastPathComponent
+        if !projectName.isEmpty {
+            return projectName
+        }
+        let fallbackName = fallback?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return fallbackName.isEmpty ? "Imported Project" : fallbackName
+    }
+
+    private static func fingerprint(value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func syncDotenvFileIfNeeded(vaultIndex: Int) throws {
+        let vault = state.vaults[vaultIndex]
+        guard let dotenvFileName = vault.dotenvFileName else { return }
+
+        let directoryURL = URL(fileURLWithPath: NSString(string: vault.projectPath).expandingTildeInPath, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let dotenvURL = directoryURL.appendingPathComponent(dotenvFileName)
+        try DotenvCodec.render(vault.variables).write(to: dotenvURL, atomically: true, encoding: .utf8)
+    }
+}

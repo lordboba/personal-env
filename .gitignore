@@ -1,0 +1,76 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode local state
+DerivedData/
+build/
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.moved-aside
+*.xcuserdatad/
+
+# Build artifacts and packaged apps
+dist/
+release/
+artifacts/
+*.app
+*.dSYM/
+*.ipa
+*.pkg
+*.zip
+
+# Swift compiler output
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+*.abi.json
+
+# Node / Next.js monorepo artifacts
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+out/
+**/out/
+.vercel/
+**/.vercel/
+.turbo/
+**/.turbo/
+coverage/
+**/coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.examples
+!.env.local.example
+
+# Logs and temporary files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+*.swp
+*.swo
+*~
+
+# Editor / tool state
+.idea/
+.vscode/
+.cursor/
