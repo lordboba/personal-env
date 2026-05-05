@@ -57,6 +57,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+codesign --force --deep --sign - "$APP_DIR"
+
 mkdir -p "$DOWNLOADS_DIR" "$DMG_STAGING_DIR"
 cp -R "$APP_DIR" "$DMG_STAGING_DIR/$APP_NAME.app"
 ln -s /Applications "$DMG_STAGING_DIR/Applications"
