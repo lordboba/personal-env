@@ -12,6 +12,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DOWNLOADS_DIR="$ROOT_DIR/download-site/public/downloads"
 DOWNLOAD_DMG="$DOWNLOADS_DIR/Personal-Env-macOS.dmg"
 STALE_DOWNLOAD_ZIP="$DOWNLOADS_DIR/Personal-Env-macOS.zip"
+STANDALONE_DOWNLOADS_DIR="$ROOT_DIR/download-site/.next/standalone/public/downloads"
 DMG_STAGING_DIR="$ROOT_DIR/dist/dmg"
 
 cd "$ROOT_DIR"
@@ -70,6 +71,12 @@ hdiutil create \
   -format UDZO \
   "$DOWNLOAD_DMG"
 rm -rf "$DMG_STAGING_DIR"
+
+if [[ -d "$ROOT_DIR/download-site/.next/standalone" ]]; then
+  mkdir -p "$STANDALONE_DOWNLOADS_DIR"
+  cp "$DOWNLOAD_DMG" "$STANDALONE_DOWNLOADS_DIR/$(basename "$DOWNLOAD_DMG")"
+  rm -f "$STANDALONE_DOWNLOADS_DIR/$(basename "$STALE_DOWNLOAD_ZIP")"
+fi
 
 echo "$APP_DIR"
 echo "$DOWNLOAD_DMG"
