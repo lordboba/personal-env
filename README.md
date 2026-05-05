@@ -37,6 +37,19 @@ bash scripts/package-macos.sh
 open "dist/Personal Env.app"
 ```
 
+The package script also writes the website download artifact to
+`download-site/public/downloads/Personal-Env-macOS.zip`, which is the file used
+by the production download CTA.
+
+This repo uses a local `post-commit` hook to keep that ZIP fresh after commits:
+
+```sh
+git config --local core.hooksPath .githooks
+```
+
+The hook rebuilds the macOS app package and stages the website ZIP for the next
+commit if it changed.
+
 `swift run PersonalEnv` builds/runs the SwiftPM executable, but packaging is the
 normal path if you want a visible macOS app bundle with a bundle identifier.
 # personal-env

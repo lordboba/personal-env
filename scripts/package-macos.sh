@@ -9,6 +9,8 @@ APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+DOWNLOADS_DIR="$ROOT_DIR/download-site/public/downloads"
+DOWNLOAD_ZIP="$DOWNLOADS_DIR/Personal-Env-macOS.zip"
 
 cd "$ROOT_DIR"
 swift build -c release --product "$EXECUTABLE_NAME"
@@ -53,4 +55,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+mkdir -p "$DOWNLOADS_DIR"
+ditto -c -k --norsrc --noextattr --keepParent "$APP_DIR" "$DOWNLOAD_ZIP"
+
 echo "$APP_DIR"
+echo "$DOWNLOAD_ZIP"

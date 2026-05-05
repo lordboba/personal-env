@@ -29,6 +29,9 @@ artifacts/
 *.ipa
 *.pkg
 *.zip
+!download-site/public/
+!download-site/public/downloads/
+!download-site/public/downloads/Personal-Env-macOS.zip
 
 # Swift compiler output
 *.swiftmodule

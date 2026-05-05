@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+DOWNLOAD_ZIP="$ROOT_DIR/download-site/public/downloads/Personal-Env-macOS.zip"
+
+bash "$ROOT_DIR/scripts/package-macos.sh" >/tmp/personal-env-post-commit.log 2>&1
+git -C "$ROOT_DIR" add "$DOWNLOAD_ZIP"
+
+echo "post-commit: staged $DOWNLOAD_ZIP"

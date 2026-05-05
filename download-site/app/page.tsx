@@ -18,6 +18,8 @@ const secrets = [
   ["API_BASE_URL", "Development"],
 ];
 
+const downloadUrl = "/downloads/Personal-Env-macOS.zip";
+
 export default function Home() {
   const defaultLight = {
     "--title-x": "34%",
@@ -52,8 +54,8 @@ export default function Home() {
         </a>
         <div className="navLinks">
           <a href="#features">Features</a>
-          <a href="https://github.com/tylerxiao/personal-env">Docs</a>
-          <a className="navDownload" href="/downloads/Personal-Env.dmg">
+          <a href="https://github.com/lordboba/personal-env">Docs</a>
+          <a className="navDownload" href={downloadUrl}>
             Download
           </a>
         </div>
@@ -89,7 +91,7 @@ export default function Home() {
           <div className="actions">
             <a
               className="primary"
-              href="/downloads/Personal-Env.dmg"
+              href={downloadUrl}
               onPointerMove={moveTextLight}
               onPointerLeave={resetTextLight}
               style={defaultLight}
@@ -99,7 +101,7 @@ export default function Home() {
             </a>
             <a
               className="secondary"
-              href="https://github.com/tylerxiao/personal-env"
+              href="https://github.com/lordboba/personal-env"
               onPointerMove={moveTextLight}
               onPointerLeave={resetTextLight}
               style={defaultLight}
