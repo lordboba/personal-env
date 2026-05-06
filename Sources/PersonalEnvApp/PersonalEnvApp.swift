@@ -5,6 +5,54 @@ import AppKit
 import PersonalEnvCore
 #endif
 
+private enum EnvTheme {
+    static let accent = Color.adaptive(
+        light: NSColor(red: 0.02, green: 0.39, blue: 0.36, alpha: 1),
+        dark: NSColor(red: 0.48, green: 0.91, blue: 0.84, alpha: 1)
+    )
+    static let accentSoft = Color.adaptive(
+        light: NSColor(red: 0.80, green: 0.91, blue: 0.88, alpha: 1),
+        dark: NSColor(red: 0.10, green: 0.27, blue: 0.25, alpha: 1)
+    )
+    static let canvas = Color.adaptive(
+        light: NSColor(red: 0.965, green: 0.955, blue: 0.935, alpha: 1),
+        dark: NSColor(red: 0.075, green: 0.090, blue: 0.090, alpha: 1)
+    )
+    static let panel = Color.adaptive(
+        light: NSColor(red: 0.985, green: 0.978, blue: 0.960, alpha: 1),
+        dark: NSColor(red: 0.105, green: 0.125, blue: 0.125, alpha: 1)
+    )
+    static let sidebar = Color.adaptive(
+        light: NSColor(red: 0.925, green: 0.910, blue: 0.875, alpha: 1),
+        dark: NSColor(red: 0.135, green: 0.145, blue: 0.140, alpha: 1)
+    )
+    static let separator = Color.adaptive(
+        light: NSColor(red: 0.78, green: 0.74, blue: 0.67, alpha: 1),
+        dark: NSColor(red: 0.28, green: 0.32, blue: 0.31, alpha: 1)
+    )
+    static let ink = Color.adaptive(
+        light: NSColor(red: 0.12, green: 0.115, blue: 0.10, alpha: 1),
+        dark: NSColor(red: 0.93, green: 0.95, blue: 0.94, alpha: 1)
+    )
+    static let muted = Color.adaptive(
+        light: NSColor(red: 0.43, green: 0.40, blue: 0.35, alpha: 1),
+        dark: NSColor(red: 0.66, green: 0.70, blue: 0.68, alpha: 1)
+    )
+    static let tableFill = Color.adaptive(
+        light: NSColor(red: 0.985, green: 0.978, blue: 0.960, alpha: 1),
+        dark: NSColor(red: 0.085, green: 0.105, blue: 0.105, alpha: 1)
+    )
+}
+
+private extension Color {
+    static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let bestMatch = appearance.bestMatch(from: [.darkAqua, .aqua])
+            return bestMatch == .darkAqua ? dark : light
+        })
+    }
+}
+
 @main
 struct PersonalEnvDesktopApp: App {
     @StateObject private var model = AppModel()
@@ -277,6 +325,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            EnvTheme.canvas.ignoresSafeArea()
             NavigationSplitView {
                 vaultList
             } detail: {
@@ -301,6 +350,7 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .tint(EnvTheme.accent)
         .sheet(isPresented: $showTutorial, onDismiss: { hasSeenWelcomeTutorial = true }) {
             WelcomeTutorialView()
                 .frame(width: 560, height: 520)
@@ -355,9 +405,9 @@ struct ContentView: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 toolbar
-                Divider()
+                EnvDivider(.horizontal)
                 variableTable
-                Divider()
+                EnvDivider(.horizontal)
                 if showEditControls {
                     addVariableBar
                 } else {
@@ -365,8 +415,9 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: 0, maxWidth: .infinity)
+            .background(EnvTheme.panel)
 
-            Divider()
+            EnvDivider(.vertical)
 
             if showInspector {
                 inspector
@@ -383,18 +434,21 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Label(vault.name, systemImage: "lock.shield")
                             .font(.headline)
+                            .foregroundStyle(EnvTheme.ink)
                         Text(vault.projectPath)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(EnvTheme.muted)
                             .lineLimit(2)
                     }
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 10)
                     .tag(vault.id)
                 }
             }
         }
         .navigationTitle("Personal Env")
         .frame(minWidth: 260)
+        .scrollContentBackground(.hidden)
+        .background(EnvTheme.sidebar)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
                 Button {
@@ -416,6 +470,7 @@ struct ContentView: View {
                 .buttonStyle(.borderless)
             }
             .padding()
+            .background(EnvTheme.sidebar)
         }
         .onChange(of: model.selectedVaultID) {
             model.selectedVariableID = model.selectedVault?.variables.first?.id
@@ -425,6 +480,17 @@ struct ContentView: View {
 
     private var toolbar: some View {
         HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.selectedVault?.name ?? "No project")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(EnvTheme.ink)
+                    .lineLimit(1)
+                Text("\(model.selectedVault?.variables.count ?? 0) variables")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(EnvTheme.muted)
+            }
+            .frame(minWidth: 180, alignment: .leading)
+
             Button {
                 model.presentImporter = true
             } label: {
@@ -445,8 +511,9 @@ struct ContentView: View {
             }
             .disabled(model.selectedVariable == nil)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(EnvTheme.panel)
     }
 
     private var variableTable: some View {
@@ -480,10 +547,11 @@ struct ContentView: View {
             }
             TableColumn("Scope") { variable in
                 Text(variable.scope)
-                    .font(.caption.weight(.semibold))
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(.blue.opacity(0.12), in: Capsule())
+                    .foregroundStyle(EnvTheme.accent)
+                    .background(EnvTheme.accentSoft, in: Capsule())
             }
             TableColumn("Updated") { variable in
                 Text(variable.updatedAt, style: .relative)
@@ -493,6 +561,8 @@ struct ContentView: View {
         .onChange(of: model.selectedVariableID) {
             syncEditor()
         }
+        .scrollContentBackground(.hidden)
+        .background(EnvTheme.tableFill)
     }
 
     private var editModePrompt: some View {
@@ -511,7 +581,7 @@ struct ContentView: View {
             .controlSize(.regular)
             .padding(12)
         }
-        .background(.thinMaterial)
+        .background(EnvTheme.canvas)
     }
 
     private var addVariableBar: some View {
@@ -542,6 +612,7 @@ struct ContentView: View {
             }
         }
         .padding(12)
+        .background(EnvTheme.canvas)
     }
 
     private var inspector: some View {
@@ -565,12 +636,14 @@ struct ContentView: View {
             }
         }
         .frame(width: 360)
+        .background(EnvTheme.canvas)
     }
 
     private var inspectorHeader: some View {
         HStack {
             Label(model.status, systemImage: "lock.open.rotation")
                 .font(.headline)
+                .foregroundStyle(EnvTheme.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
@@ -588,15 +661,16 @@ struct ContentView: View {
         VStack(spacing: 18) {
             VStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.gray.opacity(0.55))
+                    .fill(EnvTheme.accentSoft)
                     .frame(width: 76, height: 76)
                     .overlay {
                         Text(String(variable.key.prefix(1)))
-                            .font(.system(size: 46, weight: .regular))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 42, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(EnvTheme.accent)
                     }
                 Text(variable.key)
-                    .font(.title2.weight(.bold))
+                    .font(.system(.title3, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(EnvTheme.ink)
                     .multilineTextAlignment(.center)
                     .textSelection(.enabled)
                     .lineLimit(3)
@@ -618,7 +692,11 @@ struct ContentView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
-            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(EnvTheme.separator.opacity(0.55), lineWidth: 1)
+            )
 
             if showEditControls {
                 editVariableBox
@@ -641,9 +719,10 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(vault.name, systemImage: "folder")
                         .font(.title3.bold())
+                        .foregroundStyle(EnvTheme.ink)
                     Text(vault.projectPath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(EnvTheme.muted)
                         .textSelection(.enabled)
                 }
 
@@ -658,7 +737,11 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
-                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(EnvTheme.separator.opacity(0.55), lineWidth: 1)
+                )
 
                 Button {
                     showEditControls = true
@@ -703,6 +786,8 @@ struct ContentView: View {
                 }
             }
         }
+        .foregroundStyle(EnvTheme.ink)
+        .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var collapsedInspector: some View {
@@ -719,19 +804,21 @@ struct ContentView: View {
         }
         .padding(12)
         .frame(width: 54)
+        .background(EnvTheme.canvas)
     }
 
     private var unlockGate: some View {
         VStack(spacing: 20) {
             Image(systemName: "lock.shield")
                 .font(.system(size: 52, weight: .semibold))
-                .foregroundStyle(.teal)
+                .foregroundStyle(EnvTheme.accent)
             VStack(spacing: 8) {
                 Text("Unlock Personal Env")
                     .font(.largeTitle.weight(.bold))
+                    .foregroundStyle(EnvTheme.ink)
                 Text("Use your device passkey or password to access secure vault items.")
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EnvTheme.muted)
             }
             Button {
                 Task { await unlockFromLaunch() }
@@ -741,12 +828,16 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .tint(.teal)
+            .tint(EnvTheme.accent)
             .disabled(isUnlocking)
         }
         .padding(34)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .shadow(radius: 24, y: 18)
+        .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(EnvTheme.separator.opacity(0.65), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
     }
 
     private func detailRow(_ title: String, value: String, hoverText: String? = nil, action: (() -> Void)? = nil) -> some View {
@@ -756,15 +847,16 @@ struct ContentView: View {
         } label: {
             HStack {
                 Text(title)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(EnvTheme.ink)
                 Spacer()
                 Text(isHovered && action != nil ? (hoverText ?? "Click to copy") : value)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(action != nil && isHovered ? EnvTheme.accent : EnvTheme.muted)
+                    .font(.system(.caption, design: .monospaced))
                     .multilineTextAlignment(.trailing)
                     .lineLimit(2)
                 if action != nil {
                     Image(systemName: "doc.on.doc")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EnvTheme.accent)
                 }
             }
             .padding(.vertical, 12)
@@ -883,6 +975,7 @@ struct WelcomeTutorialView: View {
             HStack {
                 Label("Personal Env", systemImage: "lock.shield")
                     .font(.title.bold())
+                    .foregroundStyle(EnvTheme.ink)
                 Spacer()
                 Button("Done") {
                     dismiss()
@@ -892,7 +985,7 @@ struct WelcomeTutorialView: View {
 
             Text("A quick start for managing shared environment keys without scattering secrets across projects.")
                 .font(.title3)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(EnvTheme.muted)
 
             VStack(alignment: .leading, spacing: 16) {
                 TutorialStep(icon: "folder.badge.plus", title: "Create projects", text: "Add a project vault for each codebase that needs a clean set of environment variables.")
@@ -903,7 +996,7 @@ struct WelcomeTutorialView: View {
             Spacer()
         }
         .padding(30)
-        .background(.thinMaterial)
+        .background(EnvTheme.canvas)
     }
 }
 
@@ -924,6 +1017,7 @@ struct CreateProjectView: View {
             HStack {
                 Label("Create New Project", systemImage: "folder.badge.plus")
                     .font(.title2.bold())
+                    .foregroundStyle(EnvTheme.ink)
                 Spacer()
             }
 
@@ -931,7 +1025,7 @@ struct CreateProjectView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Name")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EnvTheme.muted)
                     TextField("Project name", text: $projectName)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -939,7 +1033,7 @@ struct CreateProjectView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Parent folder")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EnvTheme.muted)
                     HStack(spacing: 8) {
                         TextField("Parent folder", text: $parentPath)
                             .textFieldStyle(.roundedBorder)
@@ -967,6 +1061,7 @@ struct CreateProjectView: View {
             }
         }
         .padding(28)
+        .background(EnvTheme.canvas)
     }
 }
 
@@ -1025,6 +1120,7 @@ private struct UploadExistingProjectView: View {
             HStack {
                 Label("Upload Existing Project", systemImage: "tray.and.arrow.down")
                     .font(.title2.bold())
+                    .foregroundStyle(EnvTheme.ink)
                 Spacer()
             }
 
@@ -1032,7 +1128,7 @@ private struct UploadExistingProjectView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Name")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EnvTheme.muted)
                     TextField("Project name", text: $projectName)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -1040,7 +1136,7 @@ private struct UploadExistingProjectView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Folder")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EnvTheme.muted)
                     HStack(spacing: 8) {
                         TextField("Existing project folder", text: $projectPath)
                             .textFieldStyle(.roundedBorder)
@@ -1064,21 +1160,23 @@ private struct UploadExistingProjectView: View {
                 HStack {
                     Label("Detected dotenv files", systemImage: "doc.text.magnifyingglass")
                         .font(.headline)
+                        .foregroundStyle(EnvTheme.ink)
                     Spacer()
                     Text("\(selectedCount) selected")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EnvTheme.muted)
                 }
                 Text("Recursive scan is blocked for broad Mac folders like Home, Desktop, Documents, Downloads, Applications, and system roots. Choose a specific workspace or project folder.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(EnvTheme.muted)
 
                 if choices.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("No .env or .env.local variables found.")
                             .font(.headline)
+                            .foregroundStyle(EnvTheme.ink)
                         Text("Upload will still create a vault for this folder.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(EnvTheme.muted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
@@ -1107,13 +1205,13 @@ private struct UploadExistingProjectView: View {
                                                     .font(.system(.body, design: .monospaced))
                                                 Text(choice.projectPath)
                                                     .font(.caption)
-                                                    .foregroundStyle(.secondary)
+                                                    .foregroundStyle(EnvTheme.muted)
                                                     .lineLimit(1)
                                             }
                                             Spacer()
                                             Text(choice.fileName)
                                                 .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.secondary)
+                                                .foregroundStyle(EnvTheme.muted)
                                                 .padding(.horizontal, 8)
                                                 .padding(.vertical, 4)
                                                 .background(.quaternary, in: Capsule())
@@ -1146,6 +1244,7 @@ private struct UploadExistingProjectView: View {
             }
         }
         .padding(28)
+        .background(EnvTheme.canvas)
     }
 }
 
@@ -1158,7 +1257,7 @@ struct TutorialStep: View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: icon)
                 .font(.title2)
-                .foregroundStyle(.teal)
+                .foregroundStyle(EnvTheme.accent)
                 .frame(width: 36)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
@@ -1169,6 +1268,32 @@ struct TutorialStep: View {
             }
         }
         .padding(14)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(EnvTheme.separator.opacity(0.55), lineWidth: 1)
+        )
+    }
+}
+
+private struct EnvDivider: View {
+    enum Axis {
+        case horizontal
+        case vertical
+    }
+
+    let axis: Axis
+
+    init(_ axis: Axis) {
+        self.axis = axis
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(EnvTheme.separator.opacity(0.5))
+            .frame(
+                width: axis == .vertical ? 1 : nil,
+                height: axis == .horizontal ? 1 : nil
+            )
     }
 }
