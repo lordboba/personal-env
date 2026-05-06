@@ -862,10 +862,6 @@ struct ContentView: View {
                     EnvDivider(.horizontal)
                     storagePanel
                     EnvDivider(.horizontal)
-                    localAgentPanel
-                    EnvDivider(.horizontal)
-                    projectInjectionPanel
-                    EnvDivider(.horizontal)
                     activityLogPanel
                     if showEditControls || model.selectedVariable != nil {
                         EnvDivider(.horizontal)
@@ -954,54 +950,6 @@ struct ContentView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(EnvTheme.green)
             }
-        }
-        .padding(18)
-    }
-
-    private var localAgentPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Local Agent")
-                .font(.headline)
-                .foregroundStyle(EnvTheme.ink)
-            HStack(spacing: 12) {
-                Image(systemName: "cpu")
-                    .font(.title2)
-                    .foregroundStyle(EnvTheme.ink)
-                    .frame(width: 38, height: 38)
-                    .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Connected")
-                        .font(.headline)
-                        .foregroundStyle(EnvTheme.green)
-                    Text("Agent API running locally")
-                        .font(.caption)
-                        .foregroundStyle(EnvTheme.muted)
-                }
-            }
-            Button("View Permissions") {}
-                .frame(maxWidth: .infinity)
-            permissionRow("Read Variables", value: "Allowed", color: EnvTheme.green)
-            permissionRow("Inject into Processes", value: "Allowed", color: EnvTheme.green)
-            permissionRow("List Vaults", value: "Allowed", color: EnvTheme.green)
-            permissionRow("Export Variables", value: "Ask", color: EnvTheme.orange)
-            permissionRow("Share Vaults", value: "Denied", color: EnvTheme.red)
-        }
-        .padding(18)
-    }
-
-    private var projectInjectionPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Project Injection")
-                .font(.headline)
-                .foregroundStyle(EnvTheme.ink)
-            Text("These tools are approved to load variables from this vault.")
-                .font(.caption)
-                .foregroundStyle(EnvTheme.muted)
-            toolRow("VS Code", icon: "chevron.left.forwardslash.chevron.right")
-            toolRow("JetBrains Fleet", icon: "shippingbox")
-            toolRow("iTerm2", icon: "terminal")
-            Button("Manage Approvals") {}
-                .frame(maxWidth: .infinity)
         }
         .padding(18)
     }
@@ -1265,32 +1213,6 @@ struct ContentView: View {
                 .frame(width: 8, height: 8)
             Text(title)
                 .foregroundStyle(EnvTheme.muted)
-        }
-    }
-
-    private func permissionRow(_ title: String, value: String, color: Color) -> some View {
-        HStack {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(EnvTheme.ink)
-            Spacer()
-            Text(value)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(color)
-        }
-    }
-
-    private func toolRow(_ title: String, icon: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundStyle(EnvTheme.accent)
-                .frame(width: 20)
-            Text(title)
-                .foregroundStyle(EnvTheme.ink)
-            Spacer()
-            Label("Approved", systemImage: "checkmark.circle.fill")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(EnvTheme.green)
         }
     }
 
