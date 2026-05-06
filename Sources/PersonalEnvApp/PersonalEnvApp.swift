@@ -214,6 +214,35 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func renameVault(_ vault: EnvVault, name: String) async {
+        guard let service else { return }
+        do {
+            let renamedVault = try await service.renameVault(vaultID: vault.id, name: name)
+            state = await service.snapshot()
+            duplicateHints = await service.duplicateHints()
+            selectedVaultID = renamedVault.id
+            status = "Renamed vault to \(renamedVault.name)"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteVault(_ vault: EnvVault) async {
+        guard let service else { return }
+        do {
+            try await service.deleteVault(vaultID: vault.id)
+            state = await service.snapshot()
+            duplicateHints = await service.duplicateHints()
+            if selectedVaultID == vault.id {
+                selectedVaultID = state.vaults.first?.id
+                selectedVariableID = selectedVault?.variables.first?.id
+            }
+            status = "Deleted \(vault.name) from Personal Env"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func detectDotenvFiles(projectPath: String) -> [DetectedDotenvFile] {
         do {
             return try DotenvCodec.scanFilesRecursively(inDirectory: projectPath)
@@ -322,6 +351,9 @@ struct ContentView: View {
     @State private var detectedUploadFiles: [DetectedDotenvFile] = []
     @State private var uploadAllVariables = true
     @State private var selectedUploadVariableIDs = Set<UploadVariableChoice.ID>()
+    @State private var vaultToRename: EnvVault?
+    @State private var vaultRenameName = ""
+    @State private var vaultToDelete: EnvVault?
 
     var body: some View {
         ZStack {
@@ -349,6 +381,33 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")
+        }
+        .alert("Rename Vault", isPresented: Binding(get: { vaultToRename != nil }, set: { if !$0 { vaultToRename = nil } })) {
+            TextField("Vault name", text: $vaultRenameName)
+            Button("Cancel", role: .cancel) {
+                vaultToRename = nil
+            }
+            Button("Rename") {
+                guard let vault = vaultToRename else { return }
+                let name = vaultRenameName
+                vaultToRename = nil
+                Task { await model.renameVault(vault, name: name) }
+            }
+            .disabled(vaultRenameName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("Change the display name shown in Personal Env. This does not rename the project folder.")
+        }
+        .confirmationDialog("Delete Vault", isPresented: Binding(get: { vaultToDelete != nil }, set: { if !$0 { vaultToDelete = nil } })) {
+            Button("Delete from Personal Env", role: .destructive) {
+                guard let vault = vaultToDelete else { return }
+                vaultToDelete = nil
+                Task { await model.deleteVault(vault) }
+            }
+            Button("Cancel", role: .cancel) {
+                vaultToDelete = nil
+            }
+        } message: {
+            Text("This removes the vault from your Personal Env config. It does not delete the project folder or dotenv file.")
         }
         .tint(EnvTheme.accent)
         .sheet(isPresented: $showTutorial, onDismiss: { hasSeenWelcomeTutorial = true }) {
@@ -442,6 +501,22 @@ struct ContentView: View {
                     }
                     .padding(.vertical, 10)
                     .tag(vault.id)
+                    .contextMenu {
+                        Button {
+                            model.selectedVaultID = vault.id
+                            vaultRenameName = vault.name
+                            vaultToRename = vault
+                        } label: {
+                            Label("Rename Vault", systemImage: "pencil")
+                        }
+
+                        Button(role: .destructive) {
+                            model.selectedVaultID = vault.id
+                            vaultToDelete = vault
+                        } label: {
+                            Label("Delete from Personal Env", systemImage: "trash")
+                        }
+                    }
                 }
             }
         }

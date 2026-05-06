@@ -49,6 +49,33 @@ private func scanPath(_ url: URL) -> String {
     #expect(variables[0].scope == "ai")
 }
 
+@Test func renameVaultUpdatesOnlyDisplayName() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Old Name", projectPath: "/tmp/project")
+
+    let renamed = try await service.renameVault(vaultID: vault.id, name: "New Name")
+
+    #expect(renamed.id == vault.id)
+    #expect(renamed.name == "New Name")
+    #expect(renamed.projectPath == "/tmp/project")
+    #expect(await service.snapshot().vaults[0].name == "New Name")
+}
+
+@Test func deleteVaultRemovesPersonalConfigRecords() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Delete Me", projectPath: "/tmp/project")
+    try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "ai")
+
+    try await service.deleteVault(vaultID: vault.id)
+
+    let state = await service.snapshot()
+    #expect(state.vaults.isEmpty)
+    #expect(state.secrets.isEmpty)
+    #expect(state.projectSecretUses.isEmpty)
+}
+
 @Test func scansProjectDotenvFiles() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

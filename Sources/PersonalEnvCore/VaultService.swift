@@ -84,6 +84,39 @@ public actor VaultService {
         return try upsertVault(name: trimmedName, projectPath: projectURL.path, dotenvFileName: DotenvCodec.projectFileName)
     }
 
+    @discardableResult
+    public func renameVault(vaultID: UUID, name: String) throws -> EnvVault {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw PersonalEnvError.invalidRequest("Vault name is required.")
+        }
+        guard let index = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
+            throw PersonalEnvError.vaultNotFound
+        }
+
+        state.vaults[index].name = trimmedName
+        state.vaults[index].updatedAt = Date()
+        try persist()
+        return state.vaults[index]
+    }
+
+    public func deleteVault(vaultID: UUID) throws {
+        guard let index = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
+            throw PersonalEnvError.vaultNotFound
+        }
+
+        let vault = state.vaults.remove(at: index)
+        let removedSecretIDs = Set(vault.variables.map(\.id))
+        state.projectSecretUses.removeAll { use in
+            use.projectPath == vault.projectPath
+        }
+        let remainingReferencedSecretIDs = Set(state.projectSecretUses.compactMap(\.secretID))
+        state.secrets.removeAll { secret in
+            removedSecretIDs.contains(secret.id) && !remainingReferencedSecretIDs.contains(secret.id)
+        }
+        try persist()
+    }
+
     public func importDotenv(_ text: String, vaultID: UUID, scope: String = "project") async throws {
         try await unlock(reason: "Import environment variables into Apple Keychain.")
         try importVariablesWithoutUnlock(DotenvCodec.parse(text, scope: scope), vaultID: vaultID)
