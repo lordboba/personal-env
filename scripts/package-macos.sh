@@ -58,11 +58,6 @@ notarize_dmg() {
     --password "$APPLE_APP_PASSWORD" \
     --wait
   xcrun stapler staple "$DOWNLOAD_DMG"
-  local resources_xml
-  resources_xml="$(mktemp "${TMPDIR:-/tmp}/personal-env-dmg-resources.XXXXXX.xml")"
-  hdiutil udifderez -xml "$DOWNLOAD_DMG" > "$resources_xml"
-  hdiutil udifrez "$DOWNLOAD_DMG" -xml "$resources_xml"
-  rm -f "$resources_xml"
 }
 
 verify_artifacts() {
@@ -179,8 +174,17 @@ hdiutil create \
   "$DMG_RW"
 
 if [[ "$APPLY_DMG_LAYOUT" == "1" ]]; then
-  DEVICE="$(hdiutil attach "$DMG_RW" -readwrite -noverify -noautoopen | awk '/\/Volumes\/Personal Env$/ {print $1}')"
+  ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW" -readwrite -noverify -noautoopen)"
+  DEVICE="$(awk '/\/Volumes\/Personal Env/ {device=$1} END {print device}' <<<"$ATTACH_OUTPUT")"
+  if [[ -z "$DEVICE" ]]; then
+    echo "$ATTACH_OUTPUT" >&2
+    echo "Failed to find attached DMG device for $APP_NAME." >&2
+    exit 1
+  fi
   VOLUME="/Volumes/$APP_NAME"
+  if [[ ! -d "$VOLUME" ]]; then
+    VOLUME="$(awk '/\/Volumes\/Personal Env/ {for (i=3; i<=NF; i++) path = path (i == 3 ? "" : " ") $i} END {print path}' <<<"$ATTACH_OUTPUT")"
+  fi
   sleep 2
   osascript <<OSA
 tell application "Finder"

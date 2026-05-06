@@ -7,40 +7,52 @@ import PersonalEnvCore
 
 private enum EnvTheme {
     static let accent = Color.adaptive(
-        light: NSColor(red: 0.02, green: 0.39, blue: 0.36, alpha: 1),
-        dark: NSColor(red: 0.48, green: 0.91, blue: 0.84, alpha: 1)
+        light: NSColor(red: 0.16, green: 0.40, blue: 0.93, alpha: 1),
+        dark: NSColor(red: 0.42, green: 0.63, blue: 1.00, alpha: 1)
     )
     static let accentSoft = Color.adaptive(
-        light: NSColor(red: 0.80, green: 0.91, blue: 0.88, alpha: 1),
-        dark: NSColor(red: 0.10, green: 0.27, blue: 0.25, alpha: 1)
+        light: NSColor(red: 0.90, green: 0.94, blue: 1.00, alpha: 1),
+        dark: NSColor(red: 0.11, green: 0.18, blue: 0.32, alpha: 1)
     )
     static let canvas = Color.adaptive(
-        light: NSColor(red: 0.965, green: 0.955, blue: 0.935, alpha: 1),
-        dark: NSColor(red: 0.075, green: 0.090, blue: 0.090, alpha: 1)
+        light: NSColor(red: 0.985, green: 0.985, blue: 0.982, alpha: 1),
+        dark: NSColor(red: 0.075, green: 0.080, blue: 0.088, alpha: 1)
     )
     static let panel = Color.adaptive(
-        light: NSColor(red: 0.985, green: 0.978, blue: 0.960, alpha: 1),
-        dark: NSColor(red: 0.105, green: 0.125, blue: 0.125, alpha: 1)
+        light: NSColor(red: 0.997, green: 0.997, blue: 0.995, alpha: 1),
+        dark: NSColor(red: 0.105, green: 0.112, blue: 0.122, alpha: 1)
     )
     static let sidebar = Color.adaptive(
-        light: NSColor(red: 0.925, green: 0.910, blue: 0.875, alpha: 1),
-        dark: NSColor(red: 0.135, green: 0.145, blue: 0.140, alpha: 1)
+        light: NSColor(red: 0.970, green: 0.970, blue: 0.968, alpha: 1),
+        dark: NSColor(red: 0.120, green: 0.126, blue: 0.136, alpha: 1)
     )
     static let separator = Color.adaptive(
-        light: NSColor(red: 0.78, green: 0.74, blue: 0.67, alpha: 1),
-        dark: NSColor(red: 0.28, green: 0.32, blue: 0.31, alpha: 1)
+        light: NSColor(red: 0.840, green: 0.840, blue: 0.835, alpha: 1),
+        dark: NSColor(red: 0.265, green: 0.280, blue: 0.300, alpha: 1)
     )
     static let ink = Color.adaptive(
         light: NSColor(red: 0.12, green: 0.115, blue: 0.10, alpha: 1),
         dark: NSColor(red: 0.93, green: 0.95, blue: 0.94, alpha: 1)
     )
     static let muted = Color.adaptive(
-        light: NSColor(red: 0.43, green: 0.40, blue: 0.35, alpha: 1),
+        light: NSColor(red: 0.42, green: 0.42, blue: 0.45, alpha: 1),
         dark: NSColor(red: 0.66, green: 0.70, blue: 0.68, alpha: 1)
     )
     static let tableFill = Color.adaptive(
-        light: NSColor(red: 0.985, green: 0.978, blue: 0.960, alpha: 1),
+        light: NSColor(red: 0.997, green: 0.997, blue: 0.995, alpha: 1),
         dark: NSColor(red: 0.085, green: 0.105, blue: 0.105, alpha: 1)
+    )
+    static let green = Color.adaptive(
+        light: NSColor(red: 0.18, green: 0.64, blue: 0.37, alpha: 1),
+        dark: NSColor(red: 0.39, green: 0.86, blue: 0.57, alpha: 1)
+    )
+    static let orange = Color.adaptive(
+        light: NSColor(red: 0.96, green: 0.47, blue: 0.10, alpha: 1),
+        dark: NSColor(red: 1.00, green: 0.64, blue: 0.28, alpha: 1)
+    )
+    static let red = Color.adaptive(
+        light: NSColor(red: 0.82, green: 0.20, blue: 0.22, alpha: 1),
+        dark: NSColor(red: 1.00, green: 0.44, blue: 0.46, alpha: 1)
     )
 }
 
@@ -342,6 +354,8 @@ struct ContentView: View {
     @State private var showInspector = true
     @State private var showEditControls = false
     @State private var showTutorial = false
+    @State private var vaultSearchText = ""
+    @State private var variableSearchText = ""
     @State private var showNewProjectCreator = false
     @State private var showExistingProjectUpload = false
     @State private var newProjectName = ""
@@ -463,6 +477,8 @@ struct ContentView: View {
     private var mainWorkspace: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
+                appToolbar
+                EnvDivider(.horizontal)
                 toolbar
                 EnvDivider(.horizontal)
                 variableTable
@@ -488,18 +504,49 @@ struct ContentView: View {
 
     private var vaultList: some View {
         List(selection: $model.selectedVaultID) {
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(EnvTheme.muted)
+                    TextField("Search vaults...", text: $vaultSearchText)
+                        .textFieldStyle(.plain)
+                    Text("⌘F")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted.opacity(0.65))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(EnvTheme.separator.opacity(0.7), lineWidth: 1)
+                )
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 14, trailing: 14))
+            }
+
             Section("Vaults") {
-                ForEach(model.state.vaults) { vault in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label(vault.name, systemImage: "lock.shield")
-                            .font(.headline)
-                            .foregroundStyle(EnvTheme.ink)
-                        Text(vault.projectPath)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(EnvTheme.muted)
-                            .lineLimit(2)
+                ForEach(filteredVaults) { vault in
+                    HStack(spacing: 12) {
+                        vaultIcon(for: vault)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(vault.name)
+                                .font(.headline)
+                                .foregroundStyle(EnvTheme.ink)
+                                .lineLimit(1)
+                            Text(vault.projectPath)
+                                .font(.caption)
+                                .foregroundStyle(EnvTheme.muted)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        if model.selectedVaultID == vault.id {
+                            Image(systemName: "pin.fill")
+                                .font(.caption)
+                                .foregroundStyle(EnvTheme.accent)
+                        }
                     }
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                     .tag(vault.id)
                     .contextMenu {
                         Button {
@@ -553,37 +600,134 @@ struct ContentView: View {
         }
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.selectedVault?.name ?? "No project")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(EnvTheme.ink)
-                    .lineLimit(1)
-                Text("\(model.selectedVault?.variables.count ?? 0) variables")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(EnvTheme.muted)
+    private var filteredVaults: [EnvVault] {
+        let query = vaultSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return model.state.vaults }
+        return model.state.vaults.filter {
+            $0.name.lowercased().contains(query) || $0.projectPath.lowercased().contains(query)
+        }
+    }
+
+    private var filteredVariables: [EnvVariable] {
+        let variables = model.selectedVault?.variables ?? []
+        let query = variableSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return variables }
+        return variables.filter {
+            $0.key.lowercased().contains(query) || $0.scope.lowercased().contains(query)
+        }
+    }
+
+    private var appToolbar: some View {
+        HStack(spacing: 10) {
+            Button {
+                Task { await unlockFromLaunch() }
+            } label: {
+                Label(isUnlocked ? "Lock" : "Unlock", systemImage: isUnlocked ? "lock.open.fill" : "lock.fill")
             }
-            .frame(minWidth: 180, alignment: .leading)
+            .buttonStyle(.bordered)
+            .disabled(isUnlocking)
 
             Button {
                 model.presentImporter = true
             } label: {
-                Label("Import", systemImage: "square.and.arrow.down")
+                Label("Import .env", systemImage: "arrow.down.to.line")
             }
+
             Button {
                 Task { await model.exportDotenv() }
             } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
+                Label("Export", systemImage: "arrow.up.to.line")
             }
+
+            Button {
+                model.copyToClipboard(model.selectedVault?.projectPath ?? "", label: "project path")
+            } label: {
+                Label("Share", systemImage: "person.2")
+            }
+            .disabled(model.selectedVault == nil)
+
             Spacer()
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(EnvTheme.green)
+                    .frame(width: 9, height: 9)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("API Server")
+                        .font(.headline)
+                        .foregroundStyle(EnvTheme.ink)
+                    Text("Running on 127.0.0.1:51234")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                }
+            }
+
+            Button {
+                showInspector.toggle()
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Toggle inspector")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(EnvTheme.panel)
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.selectedVault?.name ?? "No project")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(EnvTheme.ink)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(model.selectedVault?.projectPath ?? "Create or upload a vault")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                        .lineLimit(1)
+                    if model.selectedVault != nil {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption)
+                            .foregroundStyle(EnvTheme.muted)
+                    }
+                }
+            }
+            .frame(minWidth: 180, alignment: .leading)
+            Spacer()
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(EnvTheme.muted)
+                TextField("Filter variables...", text: $variableSearchText)
+                    .textFieldStyle(.plain)
+                Text("⌘L")
+                    .font(.caption)
+                    .foregroundStyle(EnvTheme.muted.opacity(0.65))
+            }
+            .frame(width: 260)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(EnvTheme.canvas, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(EnvTheme.separator.opacity(0.7), lineWidth: 1)
+            )
+            Button {
+                showEditControls = true
+                showInspector = true
+            } label: {
+                Image(systemName: "plus")
+            }
+            .help("Add variable")
             Button {
                 syncEditor()
                 showEditControls = true
                 showInspector = true
             } label: {
-                Label("Edit", systemImage: "pencil")
+                Image(systemName: "ellipsis")
             }
+            .help("Edit selected variable")
             .disabled(model.selectedVariable == nil)
         }
         .padding(.horizontal, 20)
@@ -592,10 +736,15 @@ struct ContentView: View {
     }
 
     private var variableTable: some View {
-        Table(model.selectedVault?.variables ?? [], selection: $model.selectedVariableID) {
+        Table(filteredVariables, selection: $model.selectedVariableID) {
             TableColumn("Key") { variable in
-                Text(variable.key)
-                    .font(.system(.body, design: .monospaced))
+                HStack(spacing: 10) {
+                    Image(systemName: "key")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                    Text(variable.key)
+                        .font(.system(.body, design: .monospaced))
+                }
             }
             TableColumn("Value") { variable in
                 Button {
@@ -625,8 +774,8 @@ struct ContentView: View {
                     .font(.system(.caption, design: .monospaced).weight(.semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .foregroundStyle(EnvTheme.accent)
-                    .background(EnvTheme.accentSoft, in: Capsule())
+                    .foregroundStyle(scopeColor(variable.scope))
+                    .background(scopeColor(variable.scope).opacity(0.14), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
             TableColumn("Updated") { variable in
                 Text(variable.updatedAt, style: .relative)
@@ -638,6 +787,21 @@ struct ContentView: View {
         }
         .scrollContentBackground(.hidden)
         .background(EnvTheme.tableFill)
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 28) {
+                Text("\(filteredVariables.count) variables")
+                    .foregroundStyle(EnvTheme.muted)
+                Spacer()
+                scopeLegend("Production", color: EnvTheme.red)
+                scopeLegend("Staging", color: EnvTheme.orange)
+                scopeLegend("Development", color: EnvTheme.accent)
+                scopeLegend("Local", color: EnvTheme.green)
+            }
+            .font(.caption)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(EnvTheme.panel)
+        }
     }
 
     private var editModePrompt: some View {
@@ -692,21 +856,22 @@ struct ContentView: View {
 
     private var inspector: some View {
         VStack(alignment: .leading, spacing: 0) {
-            inspectorHeader
-                .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 12)
-
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    if let variable = model.selectedVariable {
-                        selectedVariableInspector(variable)
-                    } else {
-                        projectInspectorEmptyState
+                VStack(alignment: .leading, spacing: 0) {
+                    securityPanel
+                    EnvDivider(.horizontal)
+                    storagePanel
+                    EnvDivider(.horizontal)
+                    localAgentPanel
+                    EnvDivider(.horizontal)
+                    projectInjectionPanel
+                    EnvDivider(.horizontal)
+                    activityLogPanel
+                    if showEditControls || model.selectedVariable != nil {
+                        EnvDivider(.horizontal)
+                        selectedVariablePanel
                     }
                 }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -730,6 +895,138 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .help("Collapse inspector")
         }
+    }
+
+    private var securityPanel: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Unlock & Security")
+                .font(.headline)
+                .foregroundStyle(EnvTheme.ink)
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .stroke(EnvTheme.green, lineWidth: 2)
+                        .frame(width: 58, height: 58)
+                    Image(systemName: "lock.open.fill")
+                        .font(.title2)
+                        .foregroundStyle(EnvTheme.green)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isUnlocked ? "Unlocked" : "Locked")
+                        .font(.headline)
+                        .foregroundStyle(EnvTheme.ink)
+                    Text(isUnlocked ? "via Touch ID" : "Awaiting authentication")
+                        .foregroundStyle(EnvTheme.muted)
+                    Text(isUnlocked ? "Unlocked just now" : "Vault access paused")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                }
+                Spacer()
+                Button("Lock Now") {
+                    isUnlocked = false
+                }
+                .disabled(!isUnlocked)
+            }
+        }
+        .padding(18)
+    }
+
+    private var storagePanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Storage")
+                .font(.headline)
+                .foregroundStyle(EnvTheme.ink)
+            HStack(spacing: 12) {
+                Image(systemName: "keychain")
+                    .font(.title2)
+                    .foregroundStyle(EnvTheme.ink)
+                    .frame(width: 38, height: 38)
+                    .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("macOS Keychain")
+                        .font(.headline)
+                        .foregroundStyle(EnvTheme.ink)
+                    Text("Securely stored in your keychain")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                }
+                Spacer()
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(EnvTheme.green)
+            }
+        }
+        .padding(18)
+    }
+
+    private var localAgentPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Local Agent")
+                .font(.headline)
+                .foregroundStyle(EnvTheme.ink)
+            HStack(spacing: 12) {
+                Image(systemName: "cpu")
+                    .font(.title2)
+                    .foregroundStyle(EnvTheme.ink)
+                    .frame(width: 38, height: 38)
+                    .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Connected")
+                        .font(.headline)
+                        .foregroundStyle(EnvTheme.green)
+                    Text("Agent API running locally")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                }
+            }
+            Button("View Permissions") {}
+                .frame(maxWidth: .infinity)
+            permissionRow("Read Variables", value: "Allowed", color: EnvTheme.green)
+            permissionRow("Inject into Processes", value: "Allowed", color: EnvTheme.green)
+            permissionRow("List Vaults", value: "Allowed", color: EnvTheme.green)
+            permissionRow("Export Variables", value: "Ask", color: EnvTheme.orange)
+            permissionRow("Share Vaults", value: "Denied", color: EnvTheme.red)
+        }
+        .padding(18)
+    }
+
+    private var projectInjectionPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Project Injection")
+                .font(.headline)
+                .foregroundStyle(EnvTheme.ink)
+            Text("These tools are approved to load variables from this vault.")
+                .font(.caption)
+                .foregroundStyle(EnvTheme.muted)
+            toolRow("VS Code", icon: "chevron.left.forwardslash.chevron.right")
+            toolRow("JetBrains Fleet", icon: "shippingbox")
+            toolRow("iTerm2", icon: "terminal")
+            Button("Manage Approvals") {}
+                .frame(maxWidth: .infinity)
+        }
+        .padding(18)
+    }
+
+    private var activityLogPanel: some View {
+        HStack {
+            Label("Activity Log", systemImage: "clock")
+                .font(.headline)
+                .foregroundStyle(EnvTheme.ink)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .foregroundStyle(EnvTheme.muted)
+        }
+        .padding(18)
+    }
+
+    private var selectedVariablePanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let variable = model.selectedVariable {
+                selectedVariableInspector(variable)
+            } else {
+                projectInspectorEmptyState
+            }
+        }
+        .padding(18)
     }
 
     private func selectedVariableInspector(_ variable: EnvVariable) -> some View {
@@ -913,6 +1210,88 @@ struct ContentView: View {
                 .stroke(EnvTheme.separator.opacity(0.65), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
+    }
+
+    private func vaultIcon(for vault: EnvVault) -> some View {
+        let symbol: String
+        let color: Color
+        let lowerName = vault.name.lowercased()
+        if lowerName.contains("mobile") || lowerName.contains("ios") {
+            symbol = "iphone"
+            color = EnvTheme.ink
+        } else if lowerName.contains("api") || lowerName.contains("backend") {
+            symbol = "curlybraces"
+            color = EnvTheme.green
+        } else if lowerName.contains("infra") || lowerName.contains("cloud") {
+            symbol = "icloud"
+            color = Color.purple
+        } else if lowerName.contains("marketing") || lowerName.contains("site") {
+            symbol = "display"
+            color = EnvTheme.orange
+        } else if lowerName.contains("data") {
+            symbol = "cylinder.split.1x2"
+            color = EnvTheme.accent
+        } else {
+            symbol = "globe"
+            color = EnvTheme.accent
+        }
+
+        return Image(systemName: symbol)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(color)
+            .frame(width: 34, height: 34)
+            .background(color.opacity(0.13), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func scopeColor(_ scope: String) -> Color {
+        switch scope.lowercased() {
+        case "production", "prod":
+            return EnvTheme.red
+        case "staging", "stage":
+            return EnvTheme.orange
+        case "development", "dev", "project":
+            return EnvTheme.accent
+        case "local":
+            return EnvTheme.green
+        default:
+            return EnvTheme.muted
+        }
+    }
+
+    private func scopeLegend(_ title: String, color: Color) -> some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(title)
+                .foregroundStyle(EnvTheme.muted)
+        }
+    }
+
+    private func permissionRow(_ title: String, value: String, color: Color) -> some View {
+        HStack {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(EnvTheme.ink)
+            Spacer()
+            Text(value)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(color)
+        }
+    }
+
+    private func toolRow(_ title: String, icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(EnvTheme.accent)
+                .frame(width: 20)
+            Text(title)
+                .foregroundStyle(EnvTheme.ink)
+            Spacer()
+            Label("Approved", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(EnvTheme.green)
+        }
     }
 
     private func detailRow(_ title: String, value: String, hoverText: String? = nil, action: (() -> Void)? = nil) -> some View {
