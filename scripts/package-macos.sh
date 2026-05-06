@@ -58,7 +58,7 @@ notarize_dmg() {
     --password "$APPLE_APP_PASSWORD" \
     --wait
   xcrun stapler staple "$DOWNLOAD_DMG"
-  hdiutil flatten "$DOWNLOAD_DMG"
+  hdiutil udifrez "$DOWNLOAD_DMG"
 }
 
 verify_artifacts() {
