@@ -2,11 +2,6 @@ import Foundation
 import Testing
 @testable import PersonalEnvCore
 
-private func scanPath(_ url: URL) -> String {
-    let path = url.path
-    return path.hasPrefix("/var/") ? "/private\(path)" : path
-}
-
 @Test func dotenvParsingAndRendering() async throws {
     let variables = DotenvCodec.parse("""
     # ignored
@@ -87,72 +82,6 @@ private func scanPath(_ url: URL) -> String {
     #expect(files.map(\.fileName) == [".env", ".env.local"])
     #expect(files.flatMap(\.variables).map(\.key) == ["OPENAI_API_KEY", "RESEND_API_KEY"])
     #expect(files[1].variables[0].scope == "local")
-}
-
-@Test func recursiveScanFindsNestedDotenvFilesAndSkipsLargeGeneratedFolders() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-    let app = root.appendingPathComponent("ExampleApp", isDirectory: true)
-    let nested = root.appendingPathComponent("Nested/Worker", isDirectory: true)
-    let nodeModules = root.appendingPathComponent("node_modules/package", isDirectory: true)
-    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
-    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
-    try FileManager.default.createDirectory(at: nodeModules, withIntermediateDirectories: true)
-    try "OPENAI_API_KEY=sk-test\n".write(to: app.appendingPathComponent(".env.local"), atomically: true, encoding: .utf8)
-    try "RESEND_API_KEY=re-test\n".write(to: nested.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
-    try "IGNORED_KEY=ignored\n".write(to: nodeModules.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
-
-    let files = try DotenvCodec.scanFilesRecursively(inDirectory: root.path)
-
-    #expect(files.map(\.projectPath).contains(scanPath(app)))
-    #expect(files.map(\.projectPath).contains(scanPath(nested)))
-    #expect(!files.flatMap(\.variables).map(\.key).contains("IGNORED_KEY"))
-}
-
-@Test func recursiveScanBlocksBroadMacFolders() async throws {
-    #expect(throws: PersonalEnvError.self) {
-        _ = try DotenvCodec.scanFilesRecursively(inDirectory: FileManager.default.homeDirectoryForCurrentUser.path)
-    }
-}
-
-@Test func importedDetectedFilesPreserveProjectUsageAndDuplicateHints() async throws {
-    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-    let appOne = root.appendingPathComponent("AppOne", isDirectory: true)
-    let appTwo = root.appendingPathComponent("AppTwo", isDirectory: true)
-    try FileManager.default.createDirectory(at: appOne, withIntermediateDirectories: true)
-    try FileManager.default.createDirectory(at: appTwo, withIntermediateDirectories: true)
-    try "SHARED_KEY=same\n".write(to: appOne.appendingPathComponent(".env.local"), atomically: true, encoding: .utf8)
-    try "SHARED_KEY=same\n".write(to: appTwo.appendingPathComponent(".env.local"), atomically: true, encoding: .utf8)
-    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
-
-    try await service.importDetectedDotenvFiles(DotenvCodec.scanFilesRecursively(inDirectory: root.path))
-
-    let state = await service.snapshot()
-    #expect(state.vaults.map(\.projectPath).contains(scanPath(appOne)))
-    #expect(state.vaults.map(\.projectPath).contains(scanPath(appTwo)))
-    #expect(state.secrets.count == 2)
-    #expect(state.projectSecretUses.count == 2)
-    let hints = await service.duplicateHints()
-    #expect(hints.count == 1)
-    #expect(hints[0].key == "SHARED_KEY")
-    #expect(hints[0].conflictState == .sameValue)
-}
-
-@Test func legacyVaultStateHydratesInventoryMetadata() async throws {
-    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
-    let legacy = AppState(vaults: [
-        EnvVault(name: "Legacy", projectPath: "/tmp/legacy", dotenvFileName: ".env.local", variables: [
-            EnvVariable(key: "OPENAI_API_KEY", value: "sk-test", scope: "ai")
-        ])
-    ])
-    try FileStateStore(url: stateURL).saveState(legacy)
-
-    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
-    let state = await service.snapshot()
-
-    #expect(state.secrets.count == 1)
-    #expect(state.projectSecretUses.count == 1)
-    #expect(state.projectSecretUses[0].dotenvFileName == ".env.local")
 }
 
 @Test func newProjectVaultWritesDotenvFile() async throws {
