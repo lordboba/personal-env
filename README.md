@@ -54,12 +54,14 @@ export PERSONAL_ENV_APPLE_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
 PERSONAL_ENV_NOTARIZE=1 bash scripts/package-macos.sh
 ```
 
-The notarized build verifies the app signature, Gatekeeper assessment, and
-stapled notarization ticket before it exits. You can rerun those checks manually
-with:
+The notarized build signs the app and DMG, staples notarization, flattens the
+DMG for web distribution, and verifies the app signature, DMG signature,
+Gatekeeper assessment, and stapled ticket before it exits. You can rerun those
+checks manually with:
 
 ```sh
 codesign --verify --deep --strict --verbose=2 "dist/Personal Env.app"
+codesign --verify --verbose=2 "download-site/public/downloads/Personal-Env-macOS.dmg"
 spctl --assess --type execute --verbose=4 "dist/Personal Env.app"
 spctl --assess --type open --context context:primary-signature --verbose=4 "download-site/public/downloads/Personal-Env-macOS.dmg"
 xcrun stapler validate "download-site/public/downloads/Personal-Env-macOS.dmg"

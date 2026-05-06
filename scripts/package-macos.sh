@@ -46,7 +46,9 @@ sign_app() {
 }
 
 sign_dmg() {
-  :
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DOWNLOAD_DMG"
+  fi
 }
 
 notarize_dmg() {
@@ -56,10 +58,14 @@ notarize_dmg() {
     --password "$APPLE_APP_PASSWORD" \
     --wait
   xcrun stapler staple "$DOWNLOAD_DMG"
+  hdiutil flatten "$DOWNLOAD_DMG"
 }
 
 verify_artifacts() {
   codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    codesign --verify --verbose=2 "$DOWNLOAD_DMG"
+  fi
   if [[ "$NOTARIZE" == "1" ]]; then
     spctl --assess --type execute --verbose=4 "$APP_DIR"
     spctl --assess --type open --context context:primary-signature --verbose=4 "$DOWNLOAD_DMG"
