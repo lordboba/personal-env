@@ -648,20 +648,6 @@ struct ContentView: View {
 
             Spacer()
 
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(EnvTheme.green)
-                    .frame(width: 9, height: 9)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("API Server")
-                        .font(.headline)
-                        .foregroundStyle(EnvTheme.ink)
-                    Text("Running on 127.0.0.1:51234")
-                        .font(.caption)
-                        .foregroundStyle(EnvTheme.muted)
-                }
-            }
-
             Button {
                 showInspector.toggle()
             } label: {
@@ -791,11 +777,6 @@ struct ContentView: View {
             HStack(spacing: 28) {
                 Text("\(filteredVariables.count) variables")
                     .foregroundStyle(EnvTheme.muted)
-                Spacer()
-                scopeLegend("Production", color: EnvTheme.red)
-                scopeLegend("Staging", color: EnvTheme.orange)
-                scopeLegend("Development", color: EnvTheme.accent)
-                scopeLegend("Local", color: EnvTheme.green)
             }
             .font(.caption)
             .padding(.horizontal, 20)
@@ -858,10 +839,6 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    securityPanel
-                    EnvDivider(.horizontal)
-                    storagePanel
-                    EnvDivider(.horizontal)
                     activityLogPanel
                     if showEditControls || model.selectedVariable != nil {
                         EnvDivider(.horizontal)
@@ -891,67 +868,6 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .help("Collapse inspector")
         }
-    }
-
-    private var securityPanel: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Unlock & Security")
-                .font(.headline)
-                .foregroundStyle(EnvTheme.ink)
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .stroke(EnvTheme.green, lineWidth: 2)
-                        .frame(width: 58, height: 58)
-                    Image(systemName: "lock.open.fill")
-                        .font(.title2)
-                        .foregroundStyle(EnvTheme.green)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(isUnlocked ? "Unlocked" : "Locked")
-                        .font(.headline)
-                        .foregroundStyle(EnvTheme.ink)
-                    Text(isUnlocked ? "via Touch ID" : "Awaiting authentication")
-                        .foregroundStyle(EnvTheme.muted)
-                    Text(isUnlocked ? "Unlocked just now" : "Vault access paused")
-                        .font(.caption)
-                        .foregroundStyle(EnvTheme.muted)
-                }
-                Spacer()
-                Button("Lock Now") {
-                    isUnlocked = false
-                }
-                .disabled(!isUnlocked)
-            }
-        }
-        .padding(18)
-    }
-
-    private var storagePanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Storage")
-                .font(.headline)
-                .foregroundStyle(EnvTheme.ink)
-            HStack(spacing: 12) {
-                Image(systemName: "keychain")
-                    .font(.title2)
-                    .foregroundStyle(EnvTheme.ink)
-                    .frame(width: 38, height: 38)
-                    .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("macOS Keychain")
-                        .font(.headline)
-                        .foregroundStyle(EnvTheme.ink)
-                    Text("Securely stored in your keychain")
-                        .font(.caption)
-                        .foregroundStyle(EnvTheme.muted)
-                }
-                Spacer()
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(EnvTheme.green)
-            }
-        }
-        .padding(18)
     }
 
     private var activityLogPanel: some View {
