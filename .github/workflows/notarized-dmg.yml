@@ -68,7 +68,7 @@ jobs:
           PERSONAL_ENV_APPLE_TEAM_ID: ${{ secrets.PERSONAL_ENV_APPLE_TEAM_ID }}
           PERSONAL_ENV_APPLE_APP_PASSWORD: ${{ secrets.PERSONAL_ENV_APPLE_APP_PASSWORD }}
           PERSONAL_ENV_NOTARIZE: "1"
-          PERSONAL_ENV_APPLY_DMG_LAYOUT: "0"
+          PERSONAL_ENV_APPLY_DMG_LAYOUT: "1"
         run: bash scripts/package-macos.sh
 
       - name: Upload notarized DMG
