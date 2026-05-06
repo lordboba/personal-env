@@ -9,12 +9,15 @@ on:
         type: boolean
         default: false
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
 jobs:
   notarize:
     name: Sign and notarize macOS DMG
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: macos-15
     timeout-minutes: 45
 
