@@ -93,14 +93,16 @@ DMG as an artifact. When manually triggered, set **publish_to_repo** to true to
 commit the notarized DMG back to the current branch so Vercel deploys it from
 `download-site/public/downloads/Personal-Env-macOS.dmg`.
 
-This repo uses a local `post-commit` hook to keep that DMG fresh after commits:
+This repo uses a local `post-commit` hook to smoke-test macOS packaging after
+commits:
 
 ```sh
 git config --local core.hooksPath .githooks
 ```
 
-The hook rebuilds the macOS app package and stages the website DMG for the next
-commit if it changed.
+The hook rebuilds the macOS app package, restores the pre-hook website DMG, and
+leaves no DMG changes staged. The notarized GitHub Actions workflow owns the
+release DMG that Vercel deploys.
 
 `swift run PersonalEnv` builds/runs the SwiftPM executable, but packaging is the
 normal path if you want a visible macOS app bundle with a bundle identifier.

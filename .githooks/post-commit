@@ -3,8 +3,25 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 DOWNLOAD_DMG="$ROOT_DIR/download-site/public/downloads/Personal-Env-macOS.dmg"
+LOG_FILE="/tmp/personal-env-post-commit.log"
+BACKUP_DIR="$(mktemp -d)"
+BACKUP_DMG="$BACKUP_DIR/Personal-Env-macOS.dmg"
 
-bash "$ROOT_DIR/scripts/package-macos.sh" >/tmp/personal-env-post-commit.log 2>&1
-git -C "$ROOT_DIR" add "$DOWNLOAD_DMG"
+restore_dmg() {
+  if [[ -f "$BACKUP_DMG" ]]; then
+    cp "$BACKUP_DMG" "$DOWNLOAD_DMG"
+  else
+    rm -f "$DOWNLOAD_DMG"
+  fi
+  rm -rf "$BACKUP_DIR"
+}
 
-echo "post-commit: staged $DOWNLOAD_DMG"
+if [[ -f "$DOWNLOAD_DMG" ]]; then
+  cp "$DOWNLOAD_DMG" "$BACKUP_DMG"
+fi
+
+trap restore_dmg EXIT
+
+bash "$ROOT_DIR/scripts/package-macos.sh" >"$LOG_FILE" 2>&1
+
+echo "post-commit: packaging smoke test passed; log at $LOG_FILE"
