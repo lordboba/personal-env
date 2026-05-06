@@ -58,7 +58,11 @@ notarize_dmg() {
     --password "$APPLE_APP_PASSWORD" \
     --wait
   xcrun stapler staple "$DOWNLOAD_DMG"
-  hdiutil udifrez "$DOWNLOAD_DMG"
+  local resources_xml
+  resources_xml="$(mktemp "${TMPDIR:-/tmp}/personal-env-dmg-resources.XXXXXX.xml")"
+  hdiutil udifderez -xml "$DOWNLOAD_DMG" > "$resources_xml"
+  hdiutil udifrez -xml "$resources_xml" "$DOWNLOAD_DMG"
+  rm -f "$resources_xml"
 }
 
 verify_artifacts() {
