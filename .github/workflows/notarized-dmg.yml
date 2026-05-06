@@ -61,6 +61,9 @@ jobs:
       - name: Run Swift tests
         run: swift test
 
+      - name: Install DMG layout dependencies
+        run: python3 -m pip install --user Pillow
+
       - name: Build, sign, notarize, and verify DMG
         env:
           PERSONAL_ENV_SIGN_IDENTITY: ${{ secrets.PERSONAL_ENV_SIGN_IDENTITY }}
