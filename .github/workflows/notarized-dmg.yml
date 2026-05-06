@@ -2,12 +2,6 @@ name: Build notarized DMG
 
 on:
   workflow_dispatch:
-    inputs:
-      publish_to_repo:
-        description: "Commit the notarized DMG back to the current branch for Vercel to deploy"
-        required: true
-        type: boolean
-        default: false
   push:
     branches:
       - main
@@ -74,17 +68,3 @@ jobs:
           name: Personal-Env-macOS-dmg
           path: download-site/public/downloads/Personal-Env-macOS.dmg
           if-no-files-found: error
-
-      - name: Commit notarized DMG for Vercel
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_repo }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add download-site/public/downloads/Personal-Env-macOS.dmg
-          if git diff --cached --quiet; then
-            echo "No DMG changes to commit."
-          else
-            git commit -m "Update notarized macOS DMG"
-            git push
-          fi
