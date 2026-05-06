@@ -134,8 +134,9 @@ cp -R "$APP_DIR" "$DMG_STAGING_DIR/$APP_NAME.app"
 ln -s /Applications "$DMG_STAGING_DIR/Applications"
 rm -f "$DOWNLOAD_DMG" "$STALE_DOWNLOAD_ZIP"
 
-mkdir -p "$DMG_BACKGROUND_DIR"
-python3 - "$DMG_BACKGROUND" <<'PY'
+if [[ "$APPLY_DMG_LAYOUT" == "1" ]]; then
+  mkdir -p "$DMG_BACKGROUND_DIR"
+  python3 - "$DMG_BACKGROUND" <<'PY'
 from PIL import Image, ImageDraw, ImageFont
 import sys
 
@@ -163,6 +164,7 @@ for y in range(295, 425, 30):
     draw.line((925, y, 925, y + 16), fill=(250, 250, 250, 255), width=7)
 img.save(out)
 PY
+fi
 
 hdiutil create \
   -volname "$APP_NAME" \
