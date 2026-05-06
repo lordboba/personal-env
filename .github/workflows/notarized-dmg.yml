@@ -62,7 +62,10 @@ jobs:
         run: swift test
 
       - name: Install DMG layout dependencies
-        run: python3 -m pip install --user Pillow
+        run: |
+          python3 -m venv "$RUNNER_TEMP/personal-env-venv"
+          "$RUNNER_TEMP/personal-env-venv/bin/python" -m pip install Pillow
+          echo "$RUNNER_TEMP/personal-env-venv/bin" >> "$GITHUB_PATH"
 
       - name: Build, sign, notarize, and verify DMG
         env:
