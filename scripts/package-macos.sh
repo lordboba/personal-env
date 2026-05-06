@@ -67,7 +67,7 @@ verify_artifacts() {
   fi
   if [[ "$NOTARIZE" == "1" ]]; then
     spctl --assess --type execute --verbose=4 "$APP_DIR"
-    spctl --assess --type open --verbose=4 "$DOWNLOAD_DMG"
+    spctl --assess --type open --context context:primary-signature --verbose=4 "$DOWNLOAD_DMG"
     xcrun stapler validate "$DOWNLOAD_DMG"
   fi
 }

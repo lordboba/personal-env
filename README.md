@@ -62,7 +62,7 @@ checks manually with:
 codesign --verify --deep --strict --verbose=2 "dist/Personal Env.app"
 codesign --verify --verbose=2 "download-site/public/downloads/Personal-Env-macOS.dmg"
 spctl --assess --type execute --verbose=4 "dist/Personal Env.app"
-spctl --assess --type open --verbose=4 "download-site/public/downloads/Personal-Env-macOS.dmg"
+spctl --assess --type open --context context:primary-signature --verbose=4 "download-site/public/downloads/Personal-Env-macOS.dmg"
 xcrun stapler validate "download-site/public/downloads/Personal-Env-macOS.dmg"
 ```
 
