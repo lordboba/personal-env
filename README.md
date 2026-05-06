@@ -42,6 +42,57 @@ The package script also writes the website download artifact to
 by the production download CTA. The DMG contains `Personal Env.app` and an
 `Applications` symlink for the standard drag-to-Applications install flow.
 
+By default, packaging uses ad-hoc signing for local development. To make the DMG
+pass Gatekeeper for public downloads, build with a Developer ID Application
+certificate and Apple notarization credentials:
+
+```sh
+export PERSONAL_ENV_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export PERSONAL_ENV_APPLE_ID="you@example.com"
+export PERSONAL_ENV_APPLE_TEAM_ID="TEAMID"
+export PERSONAL_ENV_APPLE_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+PERSONAL_ENV_NOTARIZE=1 bash scripts/package-macos.sh
+```
+
+The notarized build verifies the app signature, DMG signature, Gatekeeper
+assessment, and stapled notarization ticket before it exits. You can rerun those
+checks manually with:
+
+```sh
+codesign --verify --deep --strict --verbose=2 "dist/Personal Env.app"
+codesign --verify --verbose=2 "download-site/public/downloads/Personal-Env-macOS.dmg"
+spctl --assess --type execute --verbose=4 "dist/Personal Env.app"
+spctl --assess --type open --verbose=4 "download-site/public/downloads/Personal-Env-macOS.dmg"
+xcrun stapler validate "download-site/public/downloads/Personal-Env-macOS.dmg"
+```
+
+GitHub Actions can also build the notarized DMG. Export the Developer ID
+Application certificate and private key from Keychain Access as a passworded
+`.p12`, base64-encode it, and add these repository secrets:
+
+```text
+APPLE_CERTIFICATE_P12_BASE64
+APPLE_CERTIFICATE_PASSWORD
+APPLE_KEYCHAIN_PASSWORD
+PERSONAL_ENV_SIGN_IDENTITY
+PERSONAL_ENV_APPLE_ID
+PERSONAL_ENV_APPLE_TEAM_ID
+PERSONAL_ENV_APPLE_APP_PASSWORD
+```
+
+Generate the base64 value with:
+
+```sh
+base64 -i DeveloperIDApplication.p12 | pbcopy
+```
+
+`APPLE_KEYCHAIN_PASSWORD` can be any strong random value used only for the
+temporary CI keychain. Trigger the workflow from GitHub Actions with **Build
+notarized DMG**, or push a `v*` tag. The workflow always uploads the notarized
+DMG as an artifact. When manually triggered, set **publish_to_repo** to true to
+commit the notarized DMG back to the current branch so Vercel deploys it from
+`download-site/public/downloads/Personal-Env-macOS.dmg`.
+
 This repo uses a local `post-commit` hook to keep that DMG fresh after commits:
 
 ```sh

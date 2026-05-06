@@ -1,0 +1,90 @@
+name: Build notarized DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_to_repo:
+        description: "Commit the notarized DMG back to the current branch for Vercel to deploy"
+        required: true
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  notarize:
+    name: Sign and notarize macOS DMG
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/personal-env-signing.keychain-db"
+
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+      - name: Verify signing identity
+        run: security find-identity -v -p codesigning
+
+      - name: Run Swift tests
+        run: swift test
+
+      - name: Install packaging dependencies
+        run: python3 -m pip install --user pillow
+
+      - name: Build, sign, notarize, and verify DMG
+        env:
+          PERSONAL_ENV_SIGN_IDENTITY: ${{ secrets.PERSONAL_ENV_SIGN_IDENTITY }}
+          PERSONAL_ENV_APPLE_ID: ${{ secrets.PERSONAL_ENV_APPLE_ID }}
+          PERSONAL_ENV_APPLE_TEAM_ID: ${{ secrets.PERSONAL_ENV_APPLE_TEAM_ID }}
+          PERSONAL_ENV_APPLE_APP_PASSWORD: ${{ secrets.PERSONAL_ENV_APPLE_APP_PASSWORD }}
+          PERSONAL_ENV_NOTARIZE: "1"
+          PERSONAL_ENV_APPLY_DMG_LAYOUT: "0"
+        run: bash scripts/package-macos.sh
+
+      - name: Upload notarized DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Personal-Env-macOS-dmg
+          path: download-site/public/downloads/Personal-Env-macOS.dmg
+          if-no-files-found: error
+
+      - name: Commit notarized DMG for Vercel
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_repo }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add download-site/public/downloads/Personal-Env-macOS.dmg
+          if git diff --cached --quiet; then
+            echo "No DMG changes to commit."
+          else
+            git commit -m "Update notarized macOS DMG"
+            git push
+          fi

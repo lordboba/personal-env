@@ -19,6 +19,62 @@ DMG_BACKGROUND="$DMG_BACKGROUND_DIR/background.png"
 DMG_RW="$ROOT_DIR/dist/Personal-Env-macOS-rw.dmg"
 ICONSET_DIR="$ROOT_DIR/dist/PersonalEnv.iconset"
 APP_ICON="$RESOURCES_DIR/PersonalEnv.icns"
+SIGN_IDENTITY="${PERSONAL_ENV_SIGN_IDENTITY:-}"
+NOTARIZE="${PERSONAL_ENV_NOTARIZE:-0}"
+APPLE_ID="${PERSONAL_ENV_APPLE_ID:-}"
+APPLE_TEAM_ID="${PERSONAL_ENV_APPLE_TEAM_ID:-}"
+APPLE_APP_PASSWORD="${PERSONAL_ENV_APPLE_APP_PASSWORD:-}"
+APPLY_DMG_LAYOUT="${PERSONAL_ENV_APPLY_DMG_LAYOUT:-1}"
+
+require_notarization_config() {
+  if [[ -z "$SIGN_IDENTITY" ]]; then
+    echo "PERSONAL_ENV_SIGN_IDENTITY is required when PERSONAL_ENV_NOTARIZE=1" >&2
+    exit 1
+  fi
+  if [[ -z "$APPLE_ID" || -z "$APPLE_TEAM_ID" || -z "$APPLE_APP_PASSWORD" ]]; then
+    echo "PERSONAL_ENV_APPLE_ID, PERSONAL_ENV_APPLE_TEAM_ID, and PERSONAL_ENV_APPLE_APP_PASSWORD are required when PERSONAL_ENV_NOTARIZE=1" >&2
+    exit 1
+  fi
+}
+
+sign_app() {
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
+  else
+    codesign --force --deep --sign - "$APP_DIR"
+  fi
+}
+
+sign_dmg() {
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DOWNLOAD_DMG"
+  fi
+}
+
+notarize_dmg() {
+  xcrun notarytool submit "$DOWNLOAD_DMG" \
+    --apple-id "$APPLE_ID" \
+    --team-id "$APPLE_TEAM_ID" \
+    --password "$APPLE_APP_PASSWORD" \
+    --wait
+  xcrun stapler staple "$DOWNLOAD_DMG"
+}
+
+verify_artifacts() {
+  codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    codesign --verify --verbose=2 "$DOWNLOAD_DMG"
+  fi
+  if [[ "$NOTARIZE" == "1" ]]; then
+    spctl --assess --type execute --verbose=4 "$APP_DIR"
+    spctl --assess --type open --verbose=4 "$DOWNLOAD_DMG"
+    xcrun stapler validate "$DOWNLOAD_DMG"
+  fi
+}
+
+if [[ "$NOTARIZE" == "1" ]]; then
+  require_notarization_config
+fi
 
 cd "$ROOT_DIR"
 swift build -c release --product "$EXECUTABLE_NAME"
@@ -71,7 +127,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP_DIR"
+sign_app
 
 mkdir -p "$DOWNLOADS_DIR" "$DMG_STAGING_DIR"
 cp -R "$APP_DIR" "$DMG_STAGING_DIR/$APP_NAME.app"
@@ -115,10 +171,11 @@ hdiutil create \
   -format UDRW \
   "$DMG_RW"
 
-DEVICE="$(hdiutil attach "$DMG_RW" -readwrite -noverify -noautoopen | awk '/\/Volumes\/Personal Env$/ {print $1}')"
-VOLUME="/Volumes/$APP_NAME"
-sleep 2
-osascript <<OSA
+if [[ "$APPLY_DMG_LAYOUT" == "1" ]]; then
+  DEVICE="$(hdiutil attach "$DMG_RW" -readwrite -noverify -noautoopen | awk '/\/Volumes\/Personal Env$/ {print $1}')"
+  VOLUME="/Volumes/$APP_NAME"
+  sleep 2
+  osascript <<OSA
 tell application "Finder"
   tell disk "$APP_NAME"
     open
@@ -140,9 +197,17 @@ tell application "Finder"
   end tell
 end tell
 OSA
-hdiutil detach "$DEVICE"
+  hdiutil detach "$DEVICE"
+fi
 hdiutil convert "$DMG_RW" -format UDZO -o "$DOWNLOAD_DMG" -ov
 rm -rf "$DMG_STAGING_DIR" "$DMG_RW"
+sign_dmg
+
+if [[ "$NOTARIZE" == "1" ]]; then
+  notarize_dmg
+fi
+
+verify_artifacts
 
 if [[ -d "$ROOT_DIR/download-site/.next/standalone" ]]; then
   mkdir -p "$STANDALONE_DOWNLOADS_DIR"
