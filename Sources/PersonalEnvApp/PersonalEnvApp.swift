@@ -346,6 +346,8 @@ struct ContentView: View {
     @State private var newScope = "project"
     @State private var hoveredVariableID: EnvVariable.ID?
     @State private var hoveredDetailRow: String?
+    @State private var copiedVariableValueID: EnvVariable.ID?
+    @State private var copiedDetailRow: String?
     @State private var editKey = ""
     @State private var editValue = ""
     @State private var editScope = ""
@@ -736,13 +738,14 @@ struct ContentView: View {
                 Button {
                     model.selectVariable(variable)
                     model.copyToClipboard(variable.value, label: variable.key)
+                    showCopiedFeedback(for: variable.id)
                 } label: {
                     HStack(spacing: 8) {
                         Text(mask(variable.value))
                             .font(.system(.body, design: .monospaced))
                         if hoveredVariableID == variable.id {
                             Image(systemName: "doc.on.doc")
-                            Text("Click to copy value")
+                            Text(copiedVariableValueID == variable.id ? "\(variable.key) copied to clipboard" : "Click to copy value")
                                 .font(.caption.weight(.semibold))
                         }
                     }
@@ -914,12 +917,14 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
 
             VStack(spacing: 0) {
-                detailRow("Key", value: variable.key, hoverText: "Click to copy key name") {
+                detailRow("Key", value: variable.key, hoverText: "Click to copy key name", copiedText: "key name copied to clipboard") {
                     model.copyToClipboard(variable.key, label: "key")
+                    showDetailCopiedFeedback(for: "Key")
                 }
                 Divider()
-                detailRow("Value", value: mask(variable.value), hoverText: "Click to copy value") {
+                detailRow("Value", value: mask(variable.value), hoverText: "Click to copy value", copiedText: "\(variable.key) copied to clipboard") {
                     model.copyToClipboard(variable.value, label: variable.key)
+                    showDetailCopiedFeedback(for: "Value")
                 }
                 Divider()
                 detailRow("Scope", value: variable.scope)
@@ -1132,8 +1137,9 @@ struct ContentView: View {
         }
     }
 
-    private func detailRow(_ title: String, value: String, hoverText: String? = nil, action: (() -> Void)? = nil) -> some View {
+    private func detailRow(_ title: String, value: String, hoverText: String? = nil, copiedText: String? = nil, action: (() -> Void)? = nil) -> some View {
         let isHovered = hoveredDetailRow == title
+        let feedbackText = copiedDetailRow == title ? (copiedText ?? "Copied") : (hoverText ?? "Click to copy")
         return Button {
             action?()
         } label: {
@@ -1141,7 +1147,7 @@ struct ContentView: View {
                 Text(title)
                     .foregroundStyle(EnvTheme.ink)
                 Spacer()
-                Text(isHovered && action != nil ? (hoverText ?? "Click to copy") : value)
+                Text(isHovered && action != nil ? feedbackText : value)
                     .foregroundStyle(action != nil && isHovered ? EnvTheme.accent : EnvTheme.muted)
                     .font(.system(.caption, design: .monospaced))
                     .multilineTextAlignment(.trailing)
@@ -1158,6 +1164,24 @@ struct ContentView: View {
         .disabled(action == nil)
         .onHover { hovering in
             hoveredDetailRow = hovering ? title : nil
+        }
+    }
+
+    private func showCopiedFeedback(for variableID: EnvVariable.ID) {
+        copiedVariableValueID = variableID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if copiedVariableValueID == variableID {
+                copiedVariableValueID = nil
+            }
+        }
+    }
+
+    private func showDetailCopiedFeedback(for rowTitle: String) {
+        copiedDetailRow = rowTitle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if copiedDetailRow == rowTitle {
+                copiedDetailRow = nil
+            }
         }
     }
 
