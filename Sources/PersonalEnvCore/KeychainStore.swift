@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 public protocol SecretStoring: Sendable {
@@ -37,7 +38,7 @@ public final class KeychainStore: SecretStoring, @unchecked Sendable {
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        query[kSecUseOperationPrompt as String] = operationPrompt
+        query[kSecUseAuthenticationContext as String] = makeKeychainAuthenticationContext(reason: operationPrompt)
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -137,7 +138,7 @@ public final class KeychainAuthorizationGrantStore: AuthorizationGrantStoring, @
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        query[kSecUseOperationPrompt as String] = operationPrompt
+        query[kSecUseAuthenticationContext as String] = makeKeychainAuthenticationContext(reason: operationPrompt)
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -187,6 +188,12 @@ public final class KeychainAuthorizationGrantStore: AuthorizationGrantStoring, @
     private func secMessage(_ status: OSStatus) -> String {
         SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
     }
+}
+
+private func makeKeychainAuthenticationContext(reason: String) -> LAContext {
+    let context = LAContext()
+    context.localizedReason = reason
+    return context
 }
 
 public final class FileStateStore: SecretStoring, @unchecked Sendable {
