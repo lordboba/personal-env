@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Personal Env Updates</title>
+    <link>https://personal-env.vercel.app</link>
+    <description>Stable releases for Personal Env.</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.1.0</title>
+      <pubDate>Fri, 15 May 2026 09:55:27 +0000</pubDate>
+      <sparkle:version>20</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <enclosure url="https://personal-env.vercel.app/downloads/Personal-Env-macOS.dmg" type="application/octet-stream" sparkle:edSignature="/fN3O3SPQBgVGqEu4KrF2/YIQ3vXehtF2hyjVbqzjomMEApzO0lXy2jwut1eBUw421cY063qxsIr3Px5y9S1DQ==" length="4205018" />
+    </item>
+  </channel>
+</rss>
