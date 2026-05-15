@@ -73,6 +73,21 @@ private extension Color {
     }
 }
 
+fileprivate enum DotenvScanState: Equatable {
+    case idle
+    case scanning(DotenvScanProgress)
+    case completed([DetectedDotenvFile])
+    case failed(String)
+    case cancelled
+
+    var isScanning: Bool {
+        if case .scanning = self {
+            return true
+        }
+        return false
+    }
+}
+
 @main
 struct PersonalEnvDesktopApp: App {
     @StateObject private var model = AppModel()
@@ -160,11 +175,14 @@ final class AppModel: ObservableObject {
     @Published var presentImporter = false
     @Published var errorMessage: String?
     @Published var duplicateHints: [DuplicateHint] = []
+    @Published fileprivate var dotenvScanState: DotenvScanState = .idle
     @Published fileprivate var searchFocusRequest: SearchFocusRequest?
     @Published private(set) var isWorking = false
     @Published private(set) var hasUnlockedSecretState = false
 
     private var service: VaultService?
+    private var dotenvScanTask: Task<Void, Never>?
+    private var activeDotenvScannerTask: Task<[DetectedDotenvFile], Error>?
 
     var canReload: Bool {
         service != nil && hasUnlockedSecretState && !isWorking
@@ -317,12 +335,91 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func detectDotenvFiles(projectPath: String) -> [DetectedDotenvFile] {
-        do {
-            return try DotenvCodec.scanFilesRecursively(inDirectory: projectPath)
-        } catch {
-            errorMessage = error.localizedDescription
-            return []
+    func resetDotenvScan() {
+        dotenvScanTask?.cancel()
+        activeDotenvScannerTask?.cancel()
+        dotenvScanTask = nil
+        activeDotenvScannerTask = nil
+        dotenvScanState = .idle
+    }
+
+    func cancelDotenvScan() {
+        dotenvScanTask?.cancel()
+        activeDotenvScannerTask?.cancel()
+        dotenvScanTask = nil
+        activeDotenvScannerTask = nil
+        dotenvScanState = .cancelled
+        status = "Cancelled .env scan"
+    }
+
+    func startApprovedDotenvScan(projectPath: String) {
+        let trimmedPath = projectPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            errorMessage = "Folder path is required."
+            return
+        }
+
+        dotenvScanTask?.cancel()
+        activeDotenvScannerTask?.cancel()
+
+        let expandedPath = NSString(string: trimmedPath).expandingTildeInPath
+        let initialProgress = DotenvScanProgress(currentPath: expandedPath)
+        dotenvScanState = .scanning(initialProgress)
+        status = "Scanning for .env files..."
+
+        let progressPipe = AsyncStream<DotenvScanProgress>.makeStream()
+        let scannerTask = Task.detached(priority: .userInitiated) {
+            defer { progressPipe.continuation.finish() }
+            return try DotenvCodec.scanApprovedDirectory(inDirectory: expandedPath) { progress in
+                progressPipe.continuation.yield(progress)
+            }
+        }
+        activeDotenvScannerTask = scannerTask
+
+        dotenvScanTask = Task { [weak self] in
+            guard let self else { return }
+            async let progressConsumer: Void = self.consumeDotenvScanProgress(progressPipe.stream)
+            do {
+                let files = try await scannerTask.value
+                _ = await progressConsumer
+                guard !Task.isCancelled else {
+                    await MainActor.run {
+                        self.dotenvScanState = .cancelled
+                        self.status = "Cancelled .env scan"
+                    }
+                    return
+                }
+                await MainActor.run {
+                    self.dotenvScanState = .completed(files)
+                    self.status = files.isEmpty ? "No .env files found" : "Detected \(files.count) .env files"
+                    self.activeDotenvScannerTask = nil
+                    self.dotenvScanTask = nil
+                }
+            } catch is CancellationError {
+                _ = await progressConsumer
+                await MainActor.run {
+                    self.dotenvScanState = .cancelled
+                    self.status = "Cancelled .env scan"
+                    self.activeDotenvScannerTask = nil
+                    self.dotenvScanTask = nil
+                }
+            } catch {
+                _ = await progressConsumer
+                await MainActor.run {
+                    self.dotenvScanState = .failed(error.localizedDescription)
+                    self.errorMessage = error.localizedDescription
+                    self.status = "Scan failed"
+                    self.activeDotenvScannerTask = nil
+                    self.dotenvScanTask = nil
+                }
+            }
+        }
+    }
+
+    private func consumeDotenvScanProgress(_ stream: AsyncStream<DotenvScanProgress>) async {
+        for await progress in stream {
+            if Task.isCancelled { break }
+            dotenvScanState = .scanning(progress)
         }
     }
 
@@ -634,8 +731,16 @@ struct ContentView: View {
         }
         .tint(EnvTheme.accent)
         .sheet(isPresented: $showTutorial, onDismiss: { hasSeenWelcomeTutorial = true }) {
-            WelcomeTutorialView()
-                .frame(width: 560, height: 520)
+            WelcomeTutorialView(
+                onScanFolders: startFirstRunFolderScan,
+                onUploadProject: startFirstRunProjectUpload,
+                onCreateProject: startFirstRunProjectCreate,
+                onDismiss: {
+                    hasSeenWelcomeTutorial = true
+                    showTutorial = false
+                }
+            )
+            .frame(width: 620, height: 540)
         }
         .sheet(isPresented: $showNewProjectCreator) {
             CreateProjectView(
@@ -660,12 +765,21 @@ struct ContentView: View {
                 projectPath: $existingProjectPath,
                 detectedFiles: $detectedUploadFiles,
                 selectedVariableIDs: $selectedUploadVariableIDs,
+                scanState: model.dotenvScanState,
                 onCancel: {
+                    if model.dotenvScanState.isScanning {
+                        model.cancelDotenvScan()
+                    } else {
+                        model.resetDotenvScan()
+                    }
                     showExistingProjectUpload = false
                 },
                 onUpload: uploadExistingProject,
                 onChooseFolder: chooseExistingProjectFolder,
-                onScan: refreshExistingProjectDetection
+                onScan: refreshExistingProjectDetection,
+                onCancelScan: {
+                    model.cancelDotenvScan()
+                }
             )
             .frame(width: 620, height: 560)
         }
@@ -682,7 +796,7 @@ struct ContentView: View {
         }
         .onAppear {
             syncEditor()
-            showTutorial = !hasSeenWelcomeTutorial
+            showTutorial = !hasSeenWelcomeTutorial && model.state.vaults.isEmpty
             Task { await unlockFromLaunch() }
         }
         .onChange(of: model.selectedVariableID) {
@@ -691,6 +805,9 @@ struct ContentView: View {
         .onChange(of: model.state) {
             syncEditor()
             pruneSelectedExportVariables()
+        }
+        .onChange(of: model.dotenvScanState) { _, scanState in
+            handleDotenvScanState(scanState)
         }
         .onChange(of: model.searchFocusRequest) { _, request in
             guard let request else { return }
@@ -1666,10 +1783,39 @@ struct ContentView: View {
     }
 
     private func prepareExistingProjectUpload() {
+        model.resetDotenvScan()
         existingProjectName = ""
         existingProjectPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Code").path
         detectedUploadFiles = []
         selectedUploadVariableIDs = []
+    }
+
+    private func startFirstRunFolderScan() {
+        hasSeenWelcomeTutorial = true
+        showTutorial = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            prepareExistingProjectUpload()
+            showExistingProjectUpload = true
+            chooseExistingProjectFolder()
+        }
+    }
+
+    private func startFirstRunProjectUpload() {
+        hasSeenWelcomeTutorial = true
+        showTutorial = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            prepareExistingProjectUpload()
+            showExistingProjectUpload = true
+        }
+    }
+
+    private func startFirstRunProjectCreate() {
+        hasSeenWelcomeTutorial = true
+        showTutorial = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            prepareNewProjectCreator()
+            showNewProjectCreator = true
+        }
     }
 
     private func prepareExportPicker() {
@@ -1700,6 +1846,8 @@ struct ContentView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.message = "Approve a folder for Personal Env to scan for .env files."
+        panel.prompt = "Approve Folder"
         panel.directoryURL = URL(fileURLWithPath: NSString(string: existingProjectPath).expandingTildeInPath)
         if panel.runModal() == .OK, let url = panel.url {
             existingProjectPath = url.path
@@ -1711,9 +1859,21 @@ struct ContentView: View {
     }
 
     private func refreshExistingProjectDetection() {
-        detectedUploadFiles = model.detectDotenvFiles(projectPath: existingProjectPath)
-        let choices = UploadVariableChoice.make(from: detectedUploadFiles)
-        selectedUploadVariableIDs = Set(choices.map(\.id))
+        detectedUploadFiles = []
+        selectedUploadVariableIDs = []
+        model.startApprovedDotenvScan(projectPath: existingProjectPath)
+    }
+
+    private func handleDotenvScanState(_ scanState: DotenvScanState) {
+        guard showExistingProjectUpload else { return }
+        switch scanState {
+        case .completed(let files):
+            detectedUploadFiles = files
+            let choices = UploadVariableChoice.make(from: files)
+            selectedUploadVariableIDs = Set(choices.map(\.id))
+        case .idle, .scanning, .failed, .cancelled:
+            break
+        }
     }
 
     private func uploadExistingProject() {
@@ -1755,29 +1915,58 @@ struct ContentView: View {
 }
 
 struct WelcomeTutorialView: View {
-    @Environment(\.dismiss) private var dismiss
+    let onScanFolders: () -> Void
+    let onUploadProject: () -> Void
+    let onCreateProject: () -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 22) {
             HStack {
                 Label("Personal Env", systemImage: "lock.shield")
                     .font(.title.bold())
                     .foregroundStyle(EnvTheme.ink)
                 Spacer()
-                Button("Done") {
-                    dismiss()
+                Button("Later") {
+                    onDismiss()
                 }
                 .keyboardShortcut(.defaultAction)
             }
 
-            Text("A quick start for managing shared environment keys without scattering secrets across projects.")
+            Text("Start by scanning an approved folder for existing .env files, uploading one project, or creating a clean vault.")
                 .font(.title3)
                 .foregroundStyle(EnvTheme.muted)
 
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    onScanFolders()
+                } label: {
+                    Label("Scan Folder for .env Files", systemImage: "doc.text.magnifyingglass")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.borderedProminent)
+
+                HStack(spacing: 10) {
+                    Button {
+                        onUploadProject()
+                    } label: {
+                        Label("Upload Project", systemImage: "tray.and.arrow.down")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Button {
+                        onCreateProject()
+                    } label: {
+                        Label("Create Project", systemImage: "folder.badge.plus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+
             VStack(alignment: .leading, spacing: 16) {
-                TutorialStep(icon: "folder.badge.plus", title: "Create projects", text: "Add a project vault for each codebase that needs a clean set of environment variables.")
+                TutorialStep(icon: "folder.badge.plus", title: "Approve folders", text: "Choose any directory you want Personal Env to scan, including Documents or Downloads.")
+                TutorialStep(icon: "doc.text.magnifyingglass", title: "Review scan results", text: "Detected .env variables stay selectable before anything is imported.")
                 TutorialStep(icon: "key.fill", title: "Add shared API keys", text: "Use Edit Vault to reveal the key fields, then save scoped values for services like AI, email, storage, or payments.")
-                TutorialStep(icon: "pencil.and.scribble", title: "Modify keys deliberately", text: "Select a key, press Edit, update the right inspector, and authenticate before changes are stored.")
             }
 
             Spacer()
@@ -1878,15 +2067,37 @@ private struct UploadVariableChoice: Identifiable, Hashable {
     }
 }
 
+private enum UploadDetectedViewMode: String, CaseIterable, Identifiable {
+    case projects
+    case allNames
+
+    var id: String { rawValue }
+}
+
+private struct UploadProjectChoiceGroup: Identifiable {
+    let projectPath: String
+    let choices: [UploadVariableChoice]
+
+    var id: String { projectPath }
+
+    var projectName: String {
+        let name = URL(fileURLWithPath: projectPath).lastPathComponent
+        return name.isEmpty ? projectPath : name
+    }
+}
+
 private struct UploadExistingProjectView: View {
     @Binding var projectName: String
     @Binding var projectPath: String
     @Binding var detectedFiles: [DetectedDotenvFile]
     @Binding var selectedVariableIDs: Set<UploadVariableChoice.ID>
+    @State private var detectedViewMode: UploadDetectedViewMode = .projects
+    let scanState: DotenvScanState
     let onCancel: () -> Void
     let onUpload: () -> Void
     let onChooseFolder: () -> Void
     let onScan: () -> Void
+    let onCancelScan: () -> Void
 
     private var choices: [UploadVariableChoice] {
         UploadVariableChoice.make(from: detectedFiles)
@@ -1896,9 +2107,28 @@ private struct UploadExistingProjectView: View {
         choices.filter { selectedVariableIDs.contains($0.id) }.count
     }
 
+    private var projectGroups: [UploadProjectChoiceGroup] {
+        Dictionary(grouping: choices, by: \.projectPath)
+            .map { projectPath, choices in
+                UploadProjectChoiceGroup(
+                    projectPath: projectPath,
+                    choices: choices.sorted { lhs, rhs in
+                        if lhs.key == rhs.key {
+                            return lhs.fileName.localizedStandardCompare(rhs.fileName) == .orderedAscending
+                        }
+                        return lhs.key.localizedStandardCompare(rhs.key) == .orderedAscending
+                    }
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.projectName.localizedStandardCompare(rhs.projectName) == .orderedAscending
+            }
+    }
+
     private var canUpload: Bool {
         !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !scanState.isScanning &&
             (choices.isEmpty || selectedCount > 0)
     }
 
@@ -1935,8 +2165,9 @@ private struct UploadExistingProjectView: View {
                         Button {
                             onScan()
                         } label: {
-                            Label("Scan", systemImage: "magnifyingglass")
+                            Label(scanState.isScanning ? "Scanning" : "Scan", systemImage: "magnifyingglass")
                         }
+                        .disabled(scanState.isScanning)
                     }
                 }
             }
@@ -1949,29 +2180,60 @@ private struct UploadExistingProjectView: View {
                         .font(.headline)
                         .foregroundStyle(EnvTheme.ink)
                     Spacer()
-                    Text(choices.isEmpty ? "No variables" : "\(selectedCount) of \(choices.count) selected")
+                    Text(scanStatusText)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(EnvTheme.muted)
                 }
-                Text("Recursive scan is blocked for broad Mac folders like Home, Desktop, Documents, Downloads, Applications, and system roots. Choose a specific workspace or project folder.")
+                Text("Scanning only runs after you approve this folder. Documents, Downloads, and custom directories are supported.")
                     .font(.caption)
                     .foregroundStyle(EnvTheme.muted)
 
-                if choices.isEmpty {
+                if case .scanning(let progress) = scanState {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Scanning for .env files")
+                                    .font(.headline)
+                                    .foregroundStyle(EnvTheme.ink)
+                                Text("\(progress.visitedItemCount) checked · \(progress.detectedFileCount) found · \(progress.skippedItemCount) skipped")
+                                    .font(.caption)
+                                    .foregroundStyle(EnvTheme.muted)
+                            }
+                            Spacer()
+                            Button {
+                                onCancelScan()
+                            } label: {
+                                Label("Cancel", systemImage: "xmark")
+                            }
+                        }
+                        if !progress.currentPath.isEmpty {
+                            Text(progress.currentPath)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(EnvTheme.muted)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                } else if choices.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("No .env or .env.local variables found.")
+                        Text(emptyStateTitle)
                             .font(.headline)
                             .foregroundStyle(EnvTheme.ink)
-                        Text("Upload will still create a vault for this folder.")
+                        Text(emptyStateDescription)
                             .foregroundStyle(EnvTheme.muted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
                     .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                } else {
-                    HStack(spacing: 10) {
-                        Button {
-                            selectedVariableIDs = Set(choices.map(\.id))
+	                } else {
+	                    HStack(spacing: 10) {
+	                        Button {
+	                            selectedVariableIDs = Set(choices.map(\.id))
                         } label: {
                             Label("Select All", systemImage: "checkmark.square")
                         }
@@ -1985,44 +2247,24 @@ private struct UploadExistingProjectView: View {
                         .buttonStyle(.borderless)
 
                         Spacer()
+
+                        Picker("Detected view", selection: $detectedViewMode) {
+                            Label("Projects", systemImage: "folder")
+                                .tag(UploadDetectedViewMode.projects)
+                            Label("All Names", systemImage: "textformat")
+                                .tag(UploadDetectedViewMode.allNames)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 230)
                     }
 
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(choices) { choice in
-                                Toggle(isOn: Binding(
-                                    get: { selectedVariableIDs.contains(choice.id) },
-                                    set: { isSelected in
-                                        if isSelected {
-                                            selectedVariableIDs.insert(choice.id)
-                                        } else {
-                                            selectedVariableIDs.remove(choice.id)
-                                        }
-                                    }
-                                )) {
-                                    HStack(spacing: 10) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(choice.key)
-                                                .font(.system(.body, design: .monospaced))
-                                            Text(choice.projectPath)
-                                                .font(.caption)
-                                                .foregroundStyle(EnvTheme.muted)
-                                                .lineLimit(1)
-                                        }
-                                        Spacer()
-                                        Text(choice.scope)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(EnvTheme.muted)
-                                        Text(choice.fileName)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(EnvTheme.muted)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(.quaternary, in: Capsule())
-                                    }
-                                }
-                                .toggleStyle(.checkbox)
-                                .padding(.vertical, 2)
+                        Group {
+                            if detectedViewMode == .projects {
+                                projectGroupedResults
+                            } else {
+                                allNameResults
                             }
                         }
                         .padding(12)
@@ -2048,6 +2290,171 @@ private struct UploadExistingProjectView: View {
         }
         .padding(28)
         .background(EnvTheme.canvas)
+    }
+
+    private var projectGroupedResults: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(projectGroups) { group in
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "folder")
+                            .foregroundStyle(EnvTheme.accent)
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(group.projectName)
+                                .font(.headline)
+                                .foregroundStyle(EnvTheme.ink)
+                                .lineLimit(1)
+                            Text(group.projectPath)
+                                .font(.caption)
+                                .foregroundStyle(EnvTheme.muted)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Text("\(selectedCount(in: group.choices)) of \(group.choices.count)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(EnvTheme.muted)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            select(group.choices)
+                        } label: {
+                            Label("Select Project", systemImage: "checkmark.square")
+                        }
+                        .buttonStyle(.borderless)
+
+                        Button {
+                            clear(group.choices)
+                        } label: {
+                            Label("Clear Project", systemImage: "square")
+                        }
+                        .buttonStyle(.borderless)
+
+                        Spacer()
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(group.choices) { choice in
+                            variableToggle(for: choice, showsProjectPath: false)
+                        }
+                    }
+                    .padding(.leading, 2)
+                }
+                .padding(12)
+                .background(EnvTheme.panel.opacity(0.72), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+    }
+
+    private var allNameResults: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(choices.sorted { lhs, rhs in
+                if lhs.key == rhs.key {
+                    return lhs.projectPath.localizedStandardCompare(rhs.projectPath) == .orderedAscending
+                }
+                return lhs.key.localizedStandardCompare(rhs.key) == .orderedAscending
+            }) { choice in
+                variableToggle(for: choice, showsProjectPath: true)
+            }
+        }
+    }
+
+    private func variableToggle(for choice: UploadVariableChoice, showsProjectPath: Bool) -> some View {
+        Toggle(isOn: Binding(
+            get: { selectedVariableIDs.contains(choice.id) },
+            set: { isSelected in
+                if isSelected {
+                    selectedVariableIDs.insert(choice.id)
+                } else {
+                    selectedVariableIDs.remove(choice.id)
+                }
+            }
+        )) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(choice.key)
+                        .font(.system(.body, design: .monospaced))
+                    if showsProjectPath {
+                        Text(choice.projectPath)
+                            .font(.caption)
+                            .foregroundStyle(EnvTheme.muted)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer()
+                Text(choice.scope)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(EnvTheme.muted)
+                Text(choice.fileName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(EnvTheme.muted)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.quaternary, in: Capsule())
+            }
+        }
+        .toggleStyle(.checkbox)
+        .padding(.vertical, 2)
+    }
+
+    private func selectedCount(in choices: [UploadVariableChoice]) -> Int {
+        choices.filter { selectedVariableIDs.contains($0.id) }.count
+    }
+
+    private func select(_ choices: [UploadVariableChoice]) {
+        selectedVariableIDs.formUnion(choices.map(\.id))
+    }
+
+    private func clear(_ choices: [UploadVariableChoice]) {
+        selectedVariableIDs.subtract(choices.map(\.id))
+    }
+
+    private var scanStatusText: String {
+        switch scanState {
+        case .idle:
+            return choices.isEmpty ? "Not scanned" : "\(selectedCount) of \(choices.count) selected"
+        case .scanning(let progress):
+            return "\(progress.detectedFileCount) found"
+        case .completed:
+            return choices.isEmpty ? "No variables" : "\(selectedCount) of \(choices.count) selected"
+        case .failed:
+            return "Scan failed"
+        case .cancelled:
+            return "Scan cancelled"
+        }
+    }
+
+    private var emptyStateTitle: String {
+        switch scanState {
+        case .idle:
+            return "Approve and scan a folder."
+        case .completed:
+            return "No .env or .env.local variables found."
+        case .failed:
+            return "Scan failed."
+        case .cancelled:
+            return "Scan cancelled."
+        case .scanning:
+            return "Scanning"
+        }
+    }
+
+    private var emptyStateDescription: String {
+        switch scanState {
+        case .idle:
+            return "Choose a folder or press Scan to review variables before import."
+        case .completed:
+            return "Upload will still create a vault for this folder."
+        case .failed:
+            return "Adjust the folder path or choose a different directory."
+        case .cancelled:
+            return "Press Scan to start again."
+        case .scanning:
+            return "Checking approved folder."
+        }
     }
 }
 

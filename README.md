@@ -4,8 +4,8 @@ Native macOS SwiftUI app for storing coding environment variables in Apple Keych
 
 ## Architecture
 
-- `PersonalEnvCore`: Keychain persistence, LocalAuthentication unlock, and `.env` import/export.
-- `PersonalEnvApp`: macOS SwiftUI app with vaults, masked variables, Touch ID/passkey unlock, import/export controls, key copy, and detail-pane editing.
+- `PersonalEnvCore`: Keychain persistence, LocalAuthentication unlock, approved-directory `.env` scanning, and `.env` import/export.
+- `PersonalEnvApp`: macOS SwiftUI app with vaults, masked variables, Touch ID/passkey unlock, first-run folder scanning, import/export controls, key copy, and detail-pane editing.
 - `penv`: developer CLI for creating vaults and setting/importing/exporting variables.
 
 ## Security Model
@@ -20,6 +20,7 @@ Native macOS SwiftUI app for storing coding environment variables in Apple Keych
 swift run penv vault "Personal Coding" /Users/tylerxiao/Code/project
 swift run penv set <vault-id> OPENAI_API_KEY sk-... ai
 swift run penv import <vault-id> .env
+swift run penv scan ~/Documents
 swift run penv export <vault-id> OPENAI_API_KEY
 ```
 

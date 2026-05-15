@@ -43,7 +43,7 @@ struct PEnvCLI {
             print("imported")
         case "scan":
             guard let path = args.first else { throw PersonalEnvError.invalidRequest("Usage: penv scan <workspace-path>") }
-            let files = try DotenvCodec.scanFilesRecursively(inDirectory: path)
+            let files = try DotenvCodec.scanApprovedDirectory(inDirectory: path)
             guard !files.isEmpty else {
                 print("no dotenv files found")
                 return

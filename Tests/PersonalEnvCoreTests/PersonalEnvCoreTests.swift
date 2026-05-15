@@ -44,6 +44,73 @@ import Testing
     #expect(variables[0].scope == "ai")
 }
 
+@Test func repeatedImportsGarbageCollectReplacedSecretRecords() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: "/tmp/project", dotenvFileName: ".env")
+
+    try await service.importVariables([
+        EnvVariable(key: "OPENAI_API_KEY", value: "first", scope: "project")
+    ], vaultID: vault.id)
+    let firstImportState = await service.snapshot()
+    let firstSecretID = try #require(firstImportState.secrets.first?.id)
+
+    try await service.importVariables([
+        EnvVariable(key: "OPENAI_API_KEY", value: "second", scope: "project")
+    ], vaultID: vault.id)
+
+    let state = await service.snapshot()
+    let variable = try #require(state.vaults.first?.variables.first)
+    #expect(state.vaults.first?.variables.count == 1)
+    #expect(variable.key == "OPENAI_API_KEY")
+    #expect(variable.value == "second")
+    #expect(state.secrets.count == 1)
+    #expect(state.secrets.first?.id == variable.id)
+    #expect(state.secrets.first?.id != firstSecretID)
+    #expect(state.projectSecretUses.count == 1)
+    #expect(state.projectSecretUses.first?.secretID == variable.id)
+    #expect(await service.duplicateHints().isEmpty)
+}
+
+@Test func garbageCollectionPreservesDuplicateKeysAcrossProjects() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let firstVault = try await service.upsertVault(name: "First", projectPath: "/tmp/first")
+    let secondVault = try await service.upsertVault(name: "Second", projectPath: "/tmp/second")
+
+    try await service.setVariable(vaultID: firstVault.id, key: "OPENAI_API_KEY", value: "first", scope: "project")
+    try await service.setVariable(vaultID: secondVault.id, key: "OPENAI_API_KEY", value: "second", scope: "project")
+
+    let state = await service.snapshot()
+    let hints = await service.duplicateHints()
+    #expect(state.secrets.count == 2)
+    #expect(hints.count == 1)
+    #expect(hints.first?.key == "OPENAI_API_KEY")
+    #expect(hints.first?.conflictState == .conflictingValues)
+    #expect(hints.first?.projectPaths == ["/tmp/first", "/tmp/second"])
+}
+
+@Test func duplicateHintsIgnoreLoadedUnreferencedSecretRecords() async throws {
+    let currentID = UUID()
+    let staleID = UUID()
+    let state = AppState(vaults: [
+        EnvVault(name: "Test", projectPath: "/tmp/project", variables: [
+            EnvVariable(id: currentID, key: "OPENAI_API_KEY", value: "current", scope: "project")
+        ])
+    ], secrets: [
+        SecretRecord(id: currentID, key: "OPENAI_API_KEY", value: "current", scope: "project", valueFingerprint: "current-fingerprint"),
+        SecretRecord(id: staleID, key: "OPENAI_API_KEY", value: "stale", scope: "project", valueFingerprint: "stale-fingerprint")
+    ], projectSecretUses: [
+        ProjectSecretUse(projectPath: "/tmp/project", dotenvFileName: ".env", key: "OPENAI_API_KEY", secretID: currentID)
+    ])
+    let store = CountingStore(state: state)
+    let service = try VaultService(store: store, authenticator: NoopAuthenticator())
+
+    try await service.reload()
+
+    #expect(await service.duplicateHints().isEmpty)
+}
+
 @Test func renameVaultUpdatesOnlyDisplayName() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
     let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
@@ -82,6 +149,62 @@ import Testing
     #expect(files.map(\.fileName) == [".env", ".env.local"])
     #expect(files.flatMap(\.variables).map(\.key) == ["OPENAI_API_KEY", "RESEND_API_KEY"])
     #expect(files[1].variables[0].scope == "local")
+}
+
+@Test func approvedScanPolicyAllowsBroadUserFolders() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let documents = home.appendingPathComponent("Documents", isDirectory: true)
+    try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+    let policy = DotenvScanPolicy(homeDirectory: home)
+
+    do {
+        try policy.validate(documents, approval: .projectFolder)
+        Issue.record("Project-folder scans should require explicit approval for broad folders.")
+    } catch {
+        #expect(error.localizedDescription.contains("Approve"))
+    }
+
+    try policy.validate(documents, approval: .userApprovedDirectory)
+}
+
+@Test func scanPolicyBlocksSystemRoots() throws {
+    let policy = DotenvScanPolicy()
+
+    do {
+        try policy.validate(URL(fileURLWithPath: "/", isDirectory: true), approval: .userApprovedDirectory)
+        Issue.record("System roots should remain blocked even when approval is explicit.")
+    } catch {
+        #expect(error.localizedDescription.contains("system roots"))
+    }
+}
+
+@Test func recursiveScanSkipsGeneratedDirectories() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let app = root.appendingPathComponent("App", isDirectory: true)
+    let generated = root.appendingPathComponent("node_modules", isDirectory: true).appendingPathComponent("pkg", isDirectory: true)
+    try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+    try "APP_KEY=expected\n".write(to: app.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+    try "IGNORED_KEY=ignored\n".write(to: generated.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+
+    let files = try DotenvCodec.scanApprovedDirectory(inDirectory: root.path)
+
+    #expect(files.count == 1)
+    #expect(files[0].variables.map(\.key) == ["APP_KEY"])
+}
+
+@Test func recursiveScanResolvesProjectRootFromMarkers() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let project = root.appendingPathComponent("Project", isDirectory: true)
+    let config = project.appendingPathComponent("config", isDirectory: true)
+    try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: project.appendingPathComponent(".git", isDirectory: true), withIntermediateDirectories: true)
+    try "PROJECT_KEY=sk-test\n".write(to: config.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+
+    let files = try DotenvCodec.scanApprovedDirectory(inDirectory: root.path)
+
+    #expect(files.count == 1)
+    #expect(files[0].projectPath == project.path)
 }
 
 @Test func newProjectVaultWritesDotenvFile() async throws {

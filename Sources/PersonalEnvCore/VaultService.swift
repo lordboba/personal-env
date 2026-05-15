@@ -32,7 +32,9 @@ public actor VaultService {
             return (secretID, use)
         }, by: { $0.0 }).mapValues { pairs in pairs.map(\.1) }
 
-        let secretsByKey = Dictionary(grouping: state.secrets, by: \.key)
+        let retainedSecretIDs = retainedSecretIDs()
+        let retainedSecrets = state.secrets.filter { retainedSecretIDs.contains($0.id) }
+        let secretsByKey = Dictionary(grouping: retainedSecrets, by: \.key)
         return secretsByKey.compactMap { key, secrets in
             guard secrets.count > 1 else { return nil }
             let fingerprints = Set(secrets.map(\.valueFingerprint))
@@ -216,7 +218,23 @@ public actor VaultService {
     }
 
     private func persist() throws {
+        garbageCollectUnreferencedSecrets()
         try store.saveState(state)
+    }
+
+    private func garbageCollectUnreferencedSecrets() {
+        let retainedSecretIDs = retainedSecretIDs()
+        state.secrets.removeAll { secret in
+            !retainedSecretIDs.contains(secret.id)
+        }
+    }
+
+    private func retainedSecretIDs() -> Set<UUID> {
+        let liveVariableIDs = Set(state.vaults.flatMap { vault in
+            vault.variables.map(\.id)
+        })
+        let trackedUseSecretIDs = Set(state.projectSecretUses.compactMap(\.secretID))
+        return liveVariableIDs.union(trackedUseSecretIDs)
     }
 
     private func loadSecretStateIfNeeded() throws {
