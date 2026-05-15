@@ -9,6 +9,7 @@ APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 DOWNLOADS_DIR="$ROOT_DIR/download-site/public/downloads"
 DOWNLOAD_DMG="$DOWNLOADS_DIR/Personal-Env-macOS.dmg"
 STALE_DOWNLOAD_ZIP="$DOWNLOADS_DIR/Personal-Env-macOS.zip"
@@ -21,6 +22,10 @@ ICONSET_DIR="$ROOT_DIR/dist/PersonalEnv.iconset"
 APP_ICON="$RESOURCES_DIR/PersonalEnv.icns"
 SIGN_IDENTITY="${PERSONAL_ENV_SIGN_IDENTITY:-}"
 NOTARIZE="${PERSONAL_ENV_NOTARIZE:-0}"
+APP_VERSION="${PERSONAL_ENV_VERSION:-0.1.0}"
+APP_BUILD="${PERSONAL_ENV_BUILD:-1}"
+SPARKLE_FEED_URL="${PERSONAL_ENV_SPARKLE_FEED_URL:-https://personal-env.vercel.app/appcast.xml}"
+SPARKLE_PUBLIC_KEY="${PERSONAL_ENV_SPARKLE_PUBLIC_KEY:-}"
 APPLE_ID="${PERSONAL_ENV_APPLE_ID:-}"
 APPLE_TEAM_ID="${PERSONAL_ENV_APPLE_TEAM_ID:-}"
 APPLE_APP_PASSWORD="${PERSONAL_ENV_APPLE_APP_PASSWORD:-}"
@@ -35,6 +40,20 @@ require_notarization_config() {
     echo "PERSONAL_ENV_APPLE_ID, PERSONAL_ENV_APPLE_TEAM_ID, and PERSONAL_ENV_APPLE_APP_PASSWORD are required when PERSONAL_ENV_NOTARIZE=1" >&2
     exit 1
   fi
+  if [[ -z "$SPARKLE_PUBLIC_KEY" ]]; then
+    echo "PERSONAL_ENV_SPARKLE_PUBLIC_KEY is required when PERSONAL_ENV_NOTARIZE=1" >&2
+    exit 1
+  fi
+}
+
+xml_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"
+  value="${value//</&lt;}"
+  value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"
+  value="${value//\'/&apos;}"
+  printf '%s' "$value"
 }
 
 sign_app() {
@@ -77,12 +96,24 @@ if [[ "$NOTARIZE" == "1" ]]; then
 fi
 
 cd "$ROOT_DIR"
-swift build -c release --product "$EXECUTABLE_NAME"
+if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
+  PERSONAL_ENV_ENABLE_SPARKLE_UPDATES=1 swift build -c release --product "$EXECUTABLE_NAME"
+else
+  swift build -c release --product "$EXECUTABLE_NAME"
+fi
 
 rm -rf "$APP_DIR" "$DMG_STAGING_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 cp "$BUILD_DIR/$EXECUTABLE_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
+
+SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build" -path '*/Sparkle.framework' -type d 2>/dev/null | head -n 1 || true)"
+if [[ -n "$SPARKLE_FRAMEWORK" ]]; then
+  cp -R "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/"
+elif [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
+  echo "Sparkle.framework was not found under .build after release build." >&2
+  exit 1
+fi
 
 rm -rf "$ICONSET_DIR"
 mkdir -p "$ICONSET_DIR"
@@ -94,7 +125,7 @@ if [[ -f "$ROOT_DIR/Assets/personal-env-ui-reference.png" ]]; then
   cp "$ROOT_DIR/Assets/personal-env-ui-reference.png" "$RESOURCES_DIR/personal-env-ui-reference.png"
 fi
 
-cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -114,9 +145,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$(xml_escape "$APP_VERSION")</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$(xml_escape "$APP_BUILD")</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
@@ -126,6 +157,12 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool true" "$CONTENTS_DIR/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" "$CONTENTS_DIR/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_KEY" "$CONTENTS_DIR/Info.plist"
+fi
 
 sign_app
 

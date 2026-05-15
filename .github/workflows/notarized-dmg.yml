@@ -61,6 +61,17 @@ jobs:
       - name: Run Swift tests
         run: swift test
 
+      - name: Resolve release metadata
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.1.0"
+          fi
+          echo "PERSONAL_ENV_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PERSONAL_ENV_BUILD=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
       - name: Install DMG layout dependencies
         run: |
           python3 -m venv "$RUNNER_TEMP/personal-env-venv"
@@ -75,7 +86,24 @@ jobs:
           PERSONAL_ENV_APPLE_APP_PASSWORD: ${{ secrets.PERSONAL_ENV_APPLE_APP_PASSWORD }}
           PERSONAL_ENV_NOTARIZE: "1"
           PERSONAL_ENV_APPLY_DMG_LAYOUT: "1"
+          PERSONAL_ENV_SPARKLE_FEED_URL: https://personal-env.vercel.app/appcast.xml
+          PERSONAL_ENV_SPARKLE_PUBLIC_KEY: ${{ secrets.PERSONAL_ENV_SPARKLE_PUBLIC_KEY }}
         run: bash scripts/package-macos.sh
+
+      - name: Generate Sparkle appcast
+        env:
+          PERSONAL_ENV_DOWNLOAD_BASE_URL: https://personal-env.vercel.app
+          PERSONAL_ENV_SPARKLE_PRIVATE_KEY: ${{ secrets.PERSONAL_ENV_SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${PERSONAL_ENV_SPARKLE_PRIVATE_KEY}" ]]; then
+            echo "PERSONAL_ENV_SPARKLE_PRIVATE_KEY secret is required to generate the Sparkle appcast." >&2
+            exit 1
+          fi
+          SPARKLE_PRIVATE_KEY_FILE="$RUNNER_TEMP/personal-env-sparkle-private-key"
+          printf '%s' "$PERSONAL_ENV_SPARKLE_PRIVATE_KEY" > "$SPARKLE_PRIVATE_KEY_FILE"
+          chmod 600 "$SPARKLE_PRIVATE_KEY_FILE"
+          PERSONAL_ENV_SPARKLE_PRIVATE_KEY_FILE="$SPARKLE_PRIVATE_KEY_FILE" bash scripts/generate-appcast.sh
 
       - name: Upload notarized DMG
         uses: actions/upload-artifact@v4
@@ -84,16 +112,23 @@ jobs:
           path: download-site/public/downloads/Personal-Env-macOS.dmg
           if-no-files-found: error
 
+      - name: Upload Sparkle appcast
+        uses: actions/upload-artifact@v4
+        with:
+          name: Personal-Env-appcast
+          path: download-site/public/appcast.xml
+          if-no-files-found: error
+
       - name: Commit notarized DMG for Vercel
         if: ${{ github.event_name == 'push' || inputs.publish_to_repo }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add download-site/public/downloads/Personal-Env-macOS.dmg
+          git add download-site/public/downloads/Personal-Env-macOS.dmg download-site/public/appcast.xml
           if git diff --cached --quiet; then
-            echo "No DMG changes to commit."
+            echo "No release artifact changes to commit."
           else
-            git commit -m "Update notarized macOS DMG"
+            git commit -m "Update notarized macOS release artifacts"
             git push
           fi

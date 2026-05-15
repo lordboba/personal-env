@@ -23,6 +23,7 @@ Components:
 - Rounded rectangles should stay small to moderate, usually 8-14px.
 - Avoid nested cards. Use panels, rows, dividers, and table density.
 - Buttons should use native SwiftUI styles, with consistent tint and compact labels.
+- Search and filter controls have one visible fill: the enclosing search row. The editable text control inside must be transparent, borderless, and bezel-free so focused text never creates a second inner rectangle.
 - Empty states should point to the next useful action.
 
 Motion:

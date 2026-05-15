@@ -1,6 +1,14 @@
 import SwiftUI
 import AppKit
 
+#if ENABLE_SPARKLE_UPDATES
+#if canImport(Sparkle)
+import Sparkle
+#else
+#error("ENABLE_SPARKLE_UPDATES requires the Sparkle module dependency.")
+#endif
+#endif
+
 #if canImport(PersonalEnvCore)
 import PersonalEnvCore
 #endif
@@ -69,6 +77,14 @@ private extension Color {
 struct PersonalEnvDesktopApp: App {
     @StateObject private var model = AppModel()
 
+    #if ENABLE_SPARKLE_UPDATES
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
+    #endif
+
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
         Self.installApplicationIcon()
@@ -96,11 +112,40 @@ struct PersonalEnvDesktopApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
+            #if ENABLE_SPARKLE_UPDATES
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    updaterController.checkForUpdates(nil)
+                }
+            }
+            #endif
             CommandGroup(after: .newItem) {
                 Button("Import .env...") {
                     model.presentImporter = true
                 }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
+
+                Button("Reload from Keychain") {
+                    Task { await model.reload() }
+                }
+                .keyboardShortcut("r", modifiers: [.command])
+                .disabled(!model.canReload)
+            }
+            CommandMenu("Search") {
+                Button("Search All Variables") {
+                    model.requestSearchFocus(.allVariableSearch)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
+                Button("Filter Variables") {
+                    model.requestSearchFocus(.variableFilter)
+                }
+                .keyboardShortcut("l", modifiers: [.command])
+
+                Button("Search Vaults") {
+                    model.requestSearchFocus(.vaultSearch)
+                }
+                .keyboardShortcut("f", modifiers: [.command])
             }
         }
     }
@@ -115,8 +160,15 @@ final class AppModel: ObservableObject {
     @Published var presentImporter = false
     @Published var errorMessage: String?
     @Published var duplicateHints: [DuplicateHint] = []
+    @Published fileprivate var searchFocusRequest: SearchFocusRequest?
+    @Published private(set) var isWorking = false
+    @Published private(set) var hasUnlockedSecretState = false
 
     private var service: VaultService?
+
+    var canReload: Bool {
+        service != nil && hasUnlockedSecretState && !isWorking
+    }
 
     var selectedVault: EnvVault? {
         state.vaults.first { $0.id == selectedVaultID } ?? state.vaults.first
@@ -128,7 +180,7 @@ final class AppModel: ObservableObject {
 
     func load() async {
         do {
-            let service = try VaultService()
+            let service = try VaultService(authenticator: LocalAuthenticator(grantStore: nil))
             self.service = service
             state = await service.snapshot()
             duplicateHints = await service.duplicateHints()
@@ -158,6 +210,8 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            isWorking = true
+            defer { isWorking = false }
             let vault = try await service.createProjectVault(name: trimmedName, parentDirectory: trimmedParent)
             state = await service.snapshot()
             selectedVaultID = vault.id
@@ -182,6 +236,8 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            isWorking = true
+            defer { isWorking = false }
             let expandedPath = NSString(string: trimmedPath).expandingTildeInPath
             let vault = try await service.upsertVault(name: trimmedName, projectPath: expandedPath)
             if !variables.isEmpty {
@@ -211,6 +267,8 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            isWorking = true
+            defer { isWorking = false }
             if files.isEmpty {
                 _ = try await service.upsertVault(name: trimmedName, projectPath: NSString(string: trimmedPath).expandingTildeInPath)
             } else {
@@ -229,6 +287,8 @@ final class AppModel: ObservableObject {
     func renameVault(_ vault: EnvVault, name: String) async {
         guard let service else { return }
         do {
+            isWorking = true
+            defer { isWorking = false }
             let renamedVault = try await service.renameVault(vaultID: vault.id, name: name)
             state = await service.snapshot()
             duplicateHints = await service.duplicateHints()
@@ -242,6 +302,8 @@ final class AppModel: ObservableObject {
     func deleteVault(_ vault: EnvVault) async {
         guard let service else { return }
         do {
+            isWorking = true
+            defer { isWorking = false }
             try await service.deleteVault(vaultID: vault.id)
             state = await service.snapshot()
             duplicateHints = await service.duplicateHints()
@@ -268,6 +330,7 @@ final class AppModel: ObservableObject {
         guard let service else { return false }
         do {
             try await service.unlock()
+            hasUnlockedSecretState = true
             status = "Unlocked with device authentication"
             return true
         } catch {
@@ -280,6 +343,8 @@ final class AppModel: ObservableObject {
     func setVariable(key: String, value: String, scope: String) async {
         guard let service, let vault = selectedVault else { return }
         do {
+            isWorking = true
+            defer { isWorking = false }
             try await service.setVariable(vaultID: vault.id, key: key, value: value, scope: scope)
             state = await service.snapshot()
             duplicateHints = await service.duplicateHints()
@@ -293,6 +358,8 @@ final class AppModel: ObservableObject {
     func updateSelectedVariable(key: String, value: String, scope: String) async {
         guard let service, let vault = selectedVault, let variableID = selectedVariableID else { return }
         do {
+            isWorking = true
+            defer { isWorking = false }
             try await service.updateVariable(vaultID: vault.id, variableID: variableID, key: key, value: value, scope: scope)
             state = await service.snapshot()
             duplicateHints = await service.duplicateHints()
@@ -306,6 +373,8 @@ final class AppModel: ObservableObject {
     func importDotenv(url: URL) async {
         guard let service, let vault = selectedVault else { return }
         do {
+            isWorking = true
+            defer { isWorking = false }
             let text = try String(contentsOf: url, encoding: .utf8)
             try await service.importDotenv(text, vaultID: vault.id)
             state = await service.snapshot()
@@ -315,13 +384,19 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func exportDotenv() async {
+    func exportDotenv(keys: [String]? = nil) async {
         guard let service, let vault = selectedVault else { return }
         do {
-            let text = try await service.exportDotenv(vaultID: vault.id)
+            isWorking = true
+            defer { isWorking = false }
+            let text = try await service.exportDotenv(vaultID: vault.id, keys: keys)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
-            status = "Copied .env export to clipboard"
+            if let keys, !keys.isEmpty {
+                status = "Copied \(keys.count) selected variables to clipboard"
+            } else {
+                status = "Copied .env export to clipboard"
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -336,11 +411,137 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.setString(text, forType: .string)
         status = "Copied \(label) to clipboard"
     }
+
+    fileprivate func requestSearchFocus(_ field: SearchFocusField) {
+        searchFocusRequest = SearchFocusRequest(field: field)
+    }
+
+    func reload(reason: String = "Reloaded from Keychain") async {
+        guard let service, canReload else { return }
+        let previousVaultID = selectedVaultID
+        let previousVariableID = selectedVariableID
+
+        do {
+            isWorking = true
+            defer { isWorking = false }
+            try await service.reload()
+            state = await service.snapshot()
+            duplicateHints = await service.duplicateHints()
+            restoreSelection(previousVaultID: previousVaultID, previousVariableID: previousVariableID)
+            status = reason
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func restoreSelection(previousVaultID: EnvVault.ID?, previousVariableID: EnvVariable.ID?) {
+        let vault = state.vaults.first { $0.id == previousVaultID } ?? state.vaults.first
+        selectedVaultID = vault?.id
+
+        if let vault, vault.variables.contains(where: { $0.id == previousVariableID }) {
+            selectedVariableID = previousVariableID
+        } else {
+            selectedVariableID = vault?.variables.first?.id
+        }
+    }
+}
+
+fileprivate enum SearchFocusField: Hashable {
+    case vaultSearch
+    case variableFilter
+    case allVariableSearch
+    case allVariableIncludeVaults
+    case allVariableExcludeVaults
+}
+
+fileprivate struct SearchFocusRequest: Equatable {
+    let id = UUID()
+    let field: SearchFocusField
+}
+
+private struct VariableSearchResult: Identifiable {
+    let vault: EnvVault
+    let variable: EnvVariable
+
+    var id: String {
+        "\(vault.id.uuidString)::\(variable.id.uuidString)"
+    }
+}
+
+private struct TransparentSearchTextField: NSViewRepresentable {
+    @Binding var text: String
+
+    let placeholder: String
+    let focusField: SearchFocusField
+    let focusedField: FocusState<SearchFocusField?>.Binding
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = NSTextField()
+        textField.delegate = context.coordinator
+        textField.isBordered = false
+        textField.isBezeled = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.usesSingleLineMode = true
+        textField.lineBreakMode = .byTruncatingTail
+        textField.font = .systemFont(ofSize: NSFont.systemFontSize)
+        textField.textColor = .labelColor
+        textField.placeholderString = placeholder
+        textField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return textField
+    }
+
+    func updateNSView(_ textField: NSTextField, context: Context) {
+        if textField.stringValue != text {
+            textField.stringValue = text
+        }
+
+        if textField.placeholderString != placeholder {
+            textField.placeholderString = placeholder
+        }
+
+        guard focusedField.wrappedValue == focusField else { return }
+        DispatchQueue.main.async {
+            if textField.window?.firstResponder !== textField.currentEditor() {
+                textField.window?.makeFirstResponder(textField)
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        private var parent: TransparentSearchTextField
+
+        init(_ parent: TransparentSearchTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? NSTextField else { return }
+            parent.text = textField.stringValue
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            parent.focusedField.wrappedValue = parent.focusField
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            if parent.focusedField.wrappedValue == parent.focusField {
+                parent.focusedField.wrappedValue = nil
+            }
+        }
+    }
 }
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("hasSeenWelcomeTutorial") private var hasSeenWelcomeTutorial = false
+    @FocusState private var focusedSearchField: SearchFocusField?
     @State private var newKey = ""
     @State private var newValue = ""
     @State private var newScope = "project"
@@ -358,6 +559,12 @@ struct ContentView: View {
     @State private var showTutorial = false
     @State private var vaultSearchText = ""
     @State private var variableSearchText = ""
+    @State private var allVariableSearchText = ""
+    @State private var allVariableIncludeVaultsText = ""
+    @State private var allVariableExcludeVaultsText = ""
+    @State private var isAllVariableSearchPresented = false
+    @State private var selectedExportVariableIDs = Set<EnvVariable.ID>()
+    @State private var showExportPicker = false
     @State private var showNewProjectCreator = false
     @State private var showExistingProjectUpload = false
     @State private var newProjectName = ""
@@ -365,11 +572,11 @@ struct ContentView: View {
     @State private var existingProjectName = ""
     @State private var existingProjectPath = ""
     @State private var detectedUploadFiles: [DetectedDotenvFile] = []
-    @State private var uploadAllVariables = true
     @State private var selectedUploadVariableIDs = Set<UploadVariableChoice.ID>()
     @State private var vaultToRename: EnvVault?
     @State private var vaultRenameName = ""
     @State private var vaultToDelete: EnvVault?
+    @State private var shouldReloadAfterActivation = false
 
     var body: some View {
         ZStack {
@@ -452,7 +659,6 @@ struct ContentView: View {
                 projectName: $existingProjectName,
                 projectPath: $existingProjectPath,
                 detectedFiles: $detectedUploadFiles,
-                uploadAllVariables: $uploadAllVariables,
                 selectedVariableIDs: $selectedUploadVariableIDs,
                 onCancel: {
                     showExistingProjectUpload = false
@@ -462,6 +668,17 @@ struct ContentView: View {
                 onScan: refreshExistingProjectDetection
             )
             .frame(width: 620, height: 560)
+        }
+        .sheet(isPresented: $showExportPicker) {
+            ExportVariablesView(
+                vault: model.selectedVault,
+                selectedVariableIDs: $selectedExportVariableIDs,
+                onCancel: {
+                    showExportPicker = false
+                },
+                onExport: exportSelectedVariables
+            )
+            .frame(width: 540, height: 520)
         }
         .onAppear {
             syncEditor()
@@ -473,6 +690,20 @@ struct ContentView: View {
         }
         .onChange(of: model.state) {
             syncEditor()
+            pruneSelectedExportVariables()
+        }
+        .onChange(of: model.searchFocusRequest) { _, request in
+            guard let request else { return }
+            focusSearchField(request.field)
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active {
+                guard shouldReloadAfterActivation else { return }
+                shouldReloadAfterActivation = false
+                Task { await reloadFromKeychain(reason: "Reloaded after app activation") }
+            } else if isUnlocked {
+                shouldReloadAfterActivation = true
+            }
         }
     }
 
@@ -510,8 +741,12 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(EnvTheme.muted)
-                    TextField("Search vaults...", text: $vaultSearchText)
-                        .textFieldStyle(.plain)
+                    TransparentSearchTextField(
+                        text: $vaultSearchText,
+                        placeholder: "Search vaults...",
+                        focusField: .vaultSearch,
+                        focusedField: $focusedSearchField
+                    )
                     Text("⌘F")
                         .font(.caption)
                         .foregroundStyle(EnvTheme.muted.opacity(0.65))
@@ -525,6 +760,14 @@ struct ContentView: View {
                 )
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 14, trailing: 14))
+            }
+
+            if isAllVariableSearchVisible {
+                Section("Search Variables") {
+                    allVariableSidebarSearchPanel
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 12, trailing: 14))
+                }
             }
 
             Section("Vaults") {
@@ -597,7 +840,14 @@ struct ContentView: View {
             .background(EnvTheme.sidebar)
         }
         .onChange(of: model.selectedVaultID) {
+            if let selectedVariableID = model.selectedVariableID,
+               model.selectedVault?.variables.contains(where: { $0.id == selectedVariableID }) == true {
+                selectedExportVariableIDs.removeAll()
+                syncEditor()
+                return
+            }
             model.selectedVariableID = model.selectedVault?.variables.first?.id
+            selectedExportVariableIDs.removeAll()
             syncEditor()
         }
     }
@@ -619,6 +869,49 @@ struct ContentView: View {
         }
     }
 
+    private var selectedExportKeys: [String] {
+        let variables = model.selectedVault?.variables ?? []
+        return variables
+            .filter { selectedExportVariableIDs.contains($0.id) }
+            .map(\.key)
+    }
+
+    private var allVariableSearchResults: [VariableSearchResult] {
+        let query = allVariableSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return [] }
+
+        return allVariableSearchVaults.flatMap { vault in
+            vault.variables.compactMap { variable in
+                guard variable.key.lowercased().contains(query) else { return nil }
+                return VariableSearchResult(vault: vault, variable: variable)
+            }
+        }
+    }
+
+    private var allVariableSearchVaults: [EnvVault] {
+        let includeTokens = searchTokens(from: allVariableIncludeVaultsText)
+        let excludeTokens = searchTokens(from: allVariableExcludeVaultsText)
+
+        return model.state.vaults.filter { vault in
+            let vaultText = "\(vault.name) \(vault.projectPath)".lowercased()
+            let included = includeTokens.isEmpty || includeTokens.contains { vaultText.contains($0) }
+            let excluded = excludeTokens.contains { vaultText.contains($0) }
+            return included && !excluded
+        }
+    }
+
+    private var isAllVariableSearchVisible: Bool {
+        isAllVariableSearchPresented ||
+            focusedSearchField == .allVariableSearch ||
+            !allVariableSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !allVariableIncludeVaultsText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !allVariableExcludeVaultsText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var canReloadFromKeychain: Bool {
+        isUnlocked && !isUnlocking && !showEditControls && !model.presentImporter && model.canReload
+    }
+
     private var appToolbar: some View {
         HStack(spacing: 10) {
             Button {
@@ -636,10 +929,20 @@ struct ContentView: View {
             }
 
             Button {
-                Task { await model.exportDotenv() }
+                Task { await reloadFromKeychain() }
+            } label: {
+                Label("Reload", systemImage: "arrow.clockwise")
+            }
+            .disabled(!canReloadFromKeychain)
+            .help("Reload from Keychain")
+
+            Button {
+                prepareExportPicker()
             } label: {
                 Label("Export", systemImage: "arrow.up.to.line")
             }
+            .disabled(model.selectedVault == nil)
+            .help("Choose variables to export")
 
             Button {
                 model.copyToClipboard(model.selectedVault?.projectPath ?? "", label: "project path")
@@ -687,8 +990,12 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(EnvTheme.muted)
-                TextField("Filter variables...", text: $variableSearchText)
-                    .textFieldStyle(.plain)
+                TransparentSearchTextField(
+                    text: $variableSearchText,
+                    placeholder: "Filter variables...",
+                    focusField: .variableFilter,
+                    focusedField: $focusedSearchField
+                )
                 Text("⌘L")
                     .font(.caption)
                     .foregroundStyle(EnvTheme.muted.opacity(0.65))
@@ -721,6 +1028,123 @@ struct ContentView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .background(EnvTheme.panel)
+    }
+
+    private var allVariableSidebarSearchPanel: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(EnvTheme.muted)
+                TransparentSearchTextField(
+                    text: $allVariableSearchText,
+                    placeholder: "Search variable names...",
+                    focusField: .allVariableSearch,
+                    focusedField: $focusedSearchField
+                )
+                Text("⌘⇧F")
+                    .font(.caption)
+                    .foregroundStyle(EnvTheme.muted.opacity(0.65))
+                Button {
+                    allVariableSearchText = ""
+                    allVariableIncludeVaultsText = ""
+                    allVariableExcludeVaultsText = ""
+                    isAllVariableSearchPresented = false
+                    focusedSearchField = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(EnvTheme.muted)
+                .help("Clear all-variable search")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(EnvTheme.canvas, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(EnvTheme.separator.opacity(0.7), lineWidth: 1)
+            )
+
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(EnvTheme.muted)
+                TransparentSearchTextField(
+                    text: $allVariableIncludeVaultsText,
+                    placeholder: "Include vaults",
+                    focusField: .allVariableIncludeVaults,
+                    focusedField: $focusedSearchField
+                )
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(EnvTheme.canvas, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(EnvTheme.separator.opacity(0.55), lineWidth: 1)
+            )
+
+            HStack(spacing: 6) {
+                Image(systemName: "minus.circle")
+                    .foregroundStyle(EnvTheme.muted)
+                TransparentSearchTextField(
+                    text: $allVariableExcludeVaultsText,
+                    placeholder: "Exclude vaults",
+                    focusField: .allVariableExcludeVaults,
+                    focusedField: $focusedSearchField
+                )
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(EnvTheme.canvas, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(EnvTheme.separator.opacity(0.55), lineWidth: 1)
+            )
+
+            if !allVariableSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                HStack {
+                    Text("\(allVariableSearchResults.count) results")
+                    Spacer()
+                    Text("\(allVariableSearchVaults.count) vaults")
+                }
+                .font(.caption)
+                .foregroundStyle(EnvTheme.muted)
+
+                if allVariableSearchResults.isEmpty {
+                    Text("No matching variables")
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(allVariableSearchResults) { result in
+                                Button {
+                                    selectSearchResult(result)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(result.variable.key)
+                                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                            .foregroundStyle(EnvTheme.ink)
+                                            .lineLimit(1)
+                                        Text(result.vault.name)
+                                            .font(.caption)
+                                            .foregroundStyle(EnvTheme.muted)
+                                            .lineLimit(1)
+                                    }
+                                    .padding(.vertical, 7)
+                                    .padding(.horizontal, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 210)
+                }
+            }
+        }
     }
 
     private var variableTable: some View {
@@ -1127,6 +1551,39 @@ struct ContentView: View {
         }
     }
 
+    private func searchTokens(from text: String) -> [String] {
+        text
+            .split { character in
+                character == "," || character == " " || character == "\n" || character == "\t"
+            }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+    }
+
+    private func selectSearchResult(_ result: VariableSearchResult) {
+        model.selectedVaultID = result.vault.id
+        model.selectedVariableID = result.variable.id
+        showInspector = true
+        syncEditor()
+    }
+
+    private func focusSearchField(_ field: SearchFocusField) {
+        guard field == .allVariableSearch else {
+            focusedSearchField = field
+            return
+        }
+
+        isAllVariableSearchPresented = true
+        DispatchQueue.main.async {
+            focusedSearchField = .allVariableSearch
+        }
+    }
+
+    private func pruneSelectedExportVariables() {
+        let validIDs = Set((model.selectedVault?.variables ?? []).map(\.id))
+        selectedExportVariableIDs = selectedExportVariableIDs.intersection(validIDs)
+    }
+
     private func scopeLegend(_ title: String, color: Color) -> some View {
         HStack(spacing: 7) {
             Circle()
@@ -1212,8 +1669,19 @@ struct ContentView: View {
         existingProjectName = ""
         existingProjectPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Code").path
         detectedUploadFiles = []
-        uploadAllVariables = true
         selectedUploadVariableIDs = []
+    }
+
+    private func prepareExportPicker() {
+        guard let vault = model.selectedVault else { return }
+        selectedExportVariableIDs = Set(vault.variables.map(\.id))
+        showExportPicker = true
+    }
+
+    private func exportSelectedVariables() {
+        let keys = selectedExportKeys
+        showExportPicker = false
+        Task { await model.exportDotenv(keys: keys.isEmpty ? nil : keys) }
     }
 
     private func chooseNewProjectParentFolder() {
@@ -1246,7 +1714,6 @@ struct ContentView: View {
         detectedUploadFiles = model.detectDotenvFiles(projectPath: existingProjectPath)
         let choices = UploadVariableChoice.make(from: detectedUploadFiles)
         selectedUploadVariableIDs = Set(choices.map(\.id))
-        uploadAllVariables = true
     }
 
     private func uploadExistingProject() {
@@ -1258,7 +1725,6 @@ struct ContentView: View {
     }
 
     private func selectedDetectedFiles() -> [DetectedDotenvFile] {
-        guard !uploadAllVariables else { return detectedUploadFiles }
         return detectedUploadFiles.compactMap { file in
             let variables = file.variables.filter { variable in
                 selectedUploadVariableIDs.contains(UploadVariableChoice.id(filePath: file.path, variableID: variable.id))
@@ -1266,6 +1732,11 @@ struct ContentView: View {
             guard !variables.isEmpty else { return nil }
             return DetectedDotenvFile(fileName: file.fileName, path: file.path, projectPath: file.projectPath, variables: variables)
         }
+    }
+
+    private func reloadFromKeychain(reason: String = "Reloaded from Keychain") async {
+        guard canReloadFromKeychain else { return }
+        await model.reload(reason: reason)
     }
 
     private func unlockFromLaunch() async {
@@ -1411,7 +1882,6 @@ private struct UploadExistingProjectView: View {
     @Binding var projectName: String
     @Binding var projectPath: String
     @Binding var detectedFiles: [DetectedDotenvFile]
-    @Binding var uploadAllVariables: Bool
     @Binding var selectedVariableIDs: Set<UploadVariableChoice.ID>
     let onCancel: () -> Void
     let onUpload: () -> Void
@@ -1423,12 +1893,13 @@ private struct UploadExistingProjectView: View {
     }
 
     private var selectedCount: Int {
-        uploadAllVariables ? choices.count : choices.filter { selectedVariableIDs.contains($0.id) }.count
+        choices.filter { selectedVariableIDs.contains($0.id) }.count
     }
 
     private var canUpload: Bool {
         !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            (choices.isEmpty || selectedCount > 0)
     }
 
     var body: some View {
@@ -1478,7 +1949,7 @@ private struct UploadExistingProjectView: View {
                         .font(.headline)
                         .foregroundStyle(EnvTheme.ink)
                     Spacer()
-                    Text("\(selectedCount) selected")
+                    Text(choices.isEmpty ? "No variables" : "\(selectedCount) of \(choices.count) selected")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(EnvTheme.muted)
                 }
@@ -1498,50 +1969,66 @@ private struct UploadExistingProjectView: View {
                     .padding(14)
                     .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 } else {
-                    Toggle("Add all variables from .env and .env.local", isOn: $uploadAllVariables)
-                        .toggleStyle(.checkbox)
+                    HStack(spacing: 10) {
+                        Button {
+                            selectedVariableIDs = Set(choices.map(\.id))
+                        } label: {
+                            Label("Select All", systemImage: "checkmark.square")
+                        }
+                        .buttonStyle(.borderless)
 
-                    if !uploadAllVariables {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(choices) { choice in
-                                    Toggle(isOn: Binding(
-                                        get: { selectedVariableIDs.contains(choice.id) },
-                                        set: { isSelected in
-                                            if isSelected {
-                                                selectedVariableIDs.insert(choice.id)
-                                            } else {
-                                                selectedVariableIDs.remove(choice.id)
-                                            }
-                                        }
-                                    )) {
-                                        HStack(spacing: 10) {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(choice.key)
-                                                    .font(.system(.body, design: .monospaced))
-                                                Text(choice.projectPath)
-                                                    .font(.caption)
-                                                    .foregroundStyle(EnvTheme.muted)
-                                                    .lineLimit(1)
-                                            }
-                                            Spacer()
-                                            Text(choice.fileName)
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(EnvTheme.muted)
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 4)
-                                                .background(.quaternary, in: Capsule())
+                        Button {
+                            selectedVariableIDs.removeAll()
+                        } label: {
+                            Label("Clear", systemImage: "square")
+                        }
+                        .buttonStyle(.borderless)
+
+                        Spacer()
+                    }
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(choices) { choice in
+                                Toggle(isOn: Binding(
+                                    get: { selectedVariableIDs.contains(choice.id) },
+                                    set: { isSelected in
+                                        if isSelected {
+                                            selectedVariableIDs.insert(choice.id)
+                                        } else {
+                                            selectedVariableIDs.remove(choice.id)
                                         }
                                     }
-                                    .toggleStyle(.checkbox)
-                                    .padding(.vertical, 2)
+                                )) {
+                                    HStack(spacing: 10) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(choice.key)
+                                                .font(.system(.body, design: .monospaced))
+                                            Text(choice.projectPath)
+                                                .font(.caption)
+                                                .foregroundStyle(EnvTheme.muted)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer()
+                                        Text(choice.scope)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(EnvTheme.muted)
+                                        Text(choice.fileName)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(EnvTheme.muted)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(.quaternary, in: Capsule())
+                                    }
                                 }
+                                .toggleStyle(.checkbox)
+                                .padding(.vertical, 2)
                             }
-                            .padding(12)
                         }
-                        .frame(maxHeight: 190)
-                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(12)
                     }
+                    .frame(maxHeight: 220)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
 
@@ -1557,6 +2044,123 @@ private struct UploadExistingProjectView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canUpload)
+            }
+        }
+        .padding(28)
+        .background(EnvTheme.canvas)
+    }
+}
+
+private struct ExportVariablesView: View {
+    let vault: EnvVault?
+    @Binding var selectedVariableIDs: Set<EnvVariable.ID>
+    let onCancel: () -> Void
+    let onExport: () -> Void
+
+    private var variables: [EnvVariable] {
+        vault?.variables ?? []
+    }
+
+    private var canExport: Bool {
+        !variables.isEmpty && !selectedVariableIDs.isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Label("Export Variables", systemImage: "arrow.up.to.line")
+                    .font(.title2.bold())
+                    .foregroundStyle(EnvTheme.ink)
+                Spacer()
+            }
+
+            if let vault {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(vault.name)
+                        .font(.headline)
+                        .foregroundStyle(EnvTheme.ink)
+                    Text(vault.projectPath)
+                        .font(.caption)
+                        .foregroundStyle(EnvTheme.muted)
+                        .lineLimit(1)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Text("\(selectedVariableIDs.count) of \(variables.count) selected")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(EnvTheme.muted)
+                Spacer()
+                Button {
+                    selectedVariableIDs = Set(variables.map(\.id))
+                } label: {
+                    Label("Select All", systemImage: "checkmark.square")
+                }
+                .buttonStyle(.borderless)
+
+                Button {
+                    selectedVariableIDs.removeAll()
+                } label: {
+                    Label("Clear", systemImage: "square")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if variables.isEmpty {
+                ContentUnavailableView {
+                    Label("No Variables", systemImage: "key")
+                } description: {
+                    Text("Add variables before exporting this vault.")
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(variables) { variable in
+                            Toggle(isOn: Binding(
+                                get: { selectedVariableIDs.contains(variable.id) },
+                                set: { isSelected in
+                                    if isSelected {
+                                        selectedVariableIDs.insert(variable.id)
+                                    } else {
+                                        selectedVariableIDs.remove(variable.id)
+                                    }
+                                }
+                            )) {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(variable.key)
+                                            .font(.system(.body, design: .monospaced))
+                                            .lineLimit(1)
+                                        Text(variable.scope)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(EnvTheme.muted)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                    .padding(12)
+                }
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            Spacer()
+
+            HStack {
+                Button("Cancel", action: onCancel)
+                Spacer()
+                Button {
+                    onExport()
+                } label: {
+                    Label("Export Selected", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canExport)
             }
         }
         .padding(28)

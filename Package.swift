@@ -2,6 +2,23 @@
 
 import PackageDescription
 
+let sparkleUpdatesEnabled = Context.environment["PERSONAL_ENV_ENABLE_SPARKLE_UPDATES"] == "1"
+
+let packageDependencies: [Package.Dependency] = sparkleUpdatesEnabled
+    ? [.package(url: "https://github.com/sparkle-project/Sparkle", from: "2.7.0")]
+    : []
+
+let appDependencies: [Target.Dependency] = sparkleUpdatesEnabled
+    ? [
+        "PersonalEnvCore",
+        .product(name: "Sparkle", package: "Sparkle")
+    ]
+    : ["PersonalEnvCore"]
+
+let appSwiftSettings: [SwiftSetting] = sparkleUpdatesEnabled
+    ? [.define("ENABLE_SPARKLE_UPDATES")]
+    : []
+
 let package = Package(
     name: "PersonalEnv",
     platforms: [
@@ -13,6 +30,7 @@ let package = Package(
         .executable(name: "penv", targets: ["penv"]),
         .library(name: "PersonalEnvCore", targets: ["PersonalEnvCore"])
     ],
+    dependencies: packageDependencies,
     targets: [
         .target(
             name: "PersonalEnvCore",
@@ -23,10 +41,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "PersonalEnvApp",
-            dependencies: ["PersonalEnvCore"],
+            dependencies: appDependencies,
             resources: [
                 .process("Assets.xcassets")
-            ]
+            ],
+            swiftSettings: appSwiftSettings
         ),
         .executableTarget(
             name: "penv",

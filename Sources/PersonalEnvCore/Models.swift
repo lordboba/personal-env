@@ -132,6 +132,31 @@ public struct AppState: Codable, Equatable, Sendable {
         secrets = try container.decodeIfPresent([SecretRecord].self, forKey: .secrets) ?? []
         projectSecretUses = try container.decodeIfPresent([ProjectSecretUse].self, forKey: .projectSecretUses) ?? []
     }
+
+    public func redactedForMetadata() -> AppState {
+        AppState(
+            vaults: vaults.map { vault in
+                EnvVault(
+                    id: vault.id,
+                    name: vault.name,
+                    projectPath: vault.projectPath,
+                    dotenvFileName: vault.dotenvFileName,
+                    variables: vault.variables.map { variable in
+                        EnvVariable(
+                            id: variable.id,
+                            key: variable.key,
+                            value: "",
+                            scope: variable.scope,
+                            updatedAt: variable.updatedAt
+                        )
+                    },
+                    updatedAt: vault.updatedAt
+                )
+            },
+            secrets: [],
+            projectSecretUses: projectSecretUses
+        )
+    }
 }
 
 public enum PersonalEnvError: Error, LocalizedError, Equatable {

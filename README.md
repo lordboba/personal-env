@@ -78,6 +78,8 @@ PERSONAL_ENV_SIGN_IDENTITY
 PERSONAL_ENV_APPLE_ID
 PERSONAL_ENV_APPLE_TEAM_ID
 PERSONAL_ENV_APPLE_APP_PASSWORD
+PERSONAL_ENV_SPARKLE_PUBLIC_KEY
+PERSONAL_ENV_SPARKLE_PRIVATE_KEY
 ```
 
 Generate the base64 value with:
@@ -103,6 +105,36 @@ git config --local core.hooksPath .githooks
 The hook rebuilds the macOS app package, restores the pre-hook website DMG, and
 leaves no DMG changes staged. The notarized GitHub Actions workflow owns the
 release DMG that Vercel deploys.
+
+## Updates
+
+Personal Env uses Sparkle 2 for stable-channel macOS updates. Release builds
+embed `SUFeedURL=https://personal-env.vercel.app/appcast.xml`, enable automatic
+update checks, and expose **Check for Updates...** in the app menu. Generate the
+Sparkle keypair once with Sparkle's `generate_keys` tool, store the printed
+public key in `PERSONAL_ENV_SPARKLE_PUBLIC_KEY`, and store the exported private
+key in `PERSONAL_ENV_SPARKLE_PRIVATE_KEY`.
+
+Local development builds do not import or link Sparkle. The SwiftPM manifest
+enables the Sparkle dependency only when
+`PERSONAL_ENV_ENABLE_SPARKLE_UPDATES=1` is set; `scripts/package-macos.sh` sets
+that flag automatically when `PERSONAL_ENV_SPARKLE_PUBLIC_KEY` is present.
+
+Version metadata is controlled by the packager:
+
+```sh
+PERSONAL_ENV_VERSION=0.1.1 \
+PERSONAL_ENV_BUILD=2 \
+PERSONAL_ENV_SPARKLE_PUBLIC_KEY="..." \
+bash scripts/package-macos.sh
+```
+
+After packaging a signed release DMG, generate the appcast with:
+
+```sh
+PERSONAL_ENV_SPARKLE_PRIVATE_KEY_FILE=/path/to/sparkle-private-key \
+bash scripts/generate-appcast.sh
+```
 
 `swift run PersonalEnv` builds/runs the SwiftPM executable, but packaging is the
 normal path if you want a visible macOS app bundle with a bundle identifier.

@@ -70,8 +70,36 @@ struct PEnvCLI {
                     print("  \(hint.key)  \(hint.conflictState.rawValue)  \(hint.projectPaths.count) projects")
                 }
             }
+        case "approve":
+            try await approve(args)
+        case "approvals":
+            try listApprovals()
+        case "revoke":
+            try KeychainAuthorizationGrantStore().revokeAllGrants()
+            print("revoked approvals")
         default:
             printHelp()
+        }
+    }
+
+    private static func approve(_ args: [String]) async throws {
+        guard let capabilityText = args.first, let capability = ApprovalCapability(cliValue: capabilityText) else {
+            throw PersonalEnvError.invalidRequest("Usage: penv approve <read|write> [--ttl 15m]")
+        }
+        let ttl = try parseTTL(args: Array(args.dropFirst()))
+        try await LocalAuthenticator(grantStore: nil).unlock(reason: "Approve Personal Env CLI \(capability.rawValue) access for \(formatDuration(ttl)).", capability: capability)
+        let grant = try KeychainAuthorizationGrantStore().approve(capability, ttl: ttl)
+        print("approved \(grant.capability.rawValue) until \(iso8601(grant.expiresAt))")
+    }
+
+    private static func listApprovals() throws {
+        let grants = try KeychainAuthorizationGrantStore().validGrants()
+        guard !grants.isEmpty else {
+            print("no active approvals")
+            return
+        }
+        for grant in grants.sorted(by: { $0.expiresAt < $1.expiresAt }) {
+            print("\(grant.capability.rawValue)  expires \(iso8601(grant.expiresAt))")
         }
     }
 
@@ -80,6 +108,40 @@ struct PEnvCLI {
             throw PersonalEnvError.invalidRequest("Invalid UUID: \(value)")
         }
         return uuid
+    }
+
+    private static func parseTTL(args: [String]) throws -> TimeInterval {
+        guard !args.isEmpty else { return 15 * 60 }
+        guard args.count == 2, args[0] == "--ttl" else {
+            throw PersonalEnvError.invalidRequest("Usage: penv approve <read|write> [--ttl 15m]")
+        }
+        return try parseDuration(args[1])
+    }
+
+    private static func parseDuration(_ value: String) throws -> TimeInterval {
+        guard let unit = value.last, let number = Double(value.dropLast()), number > 0 else {
+            throw PersonalEnvError.invalidRequest("TTL must look like 30s, 15m, or 1h.")
+        }
+        switch unit {
+        case "s": return number
+        case "m": return number * 60
+        case "h": return number * 60 * 60
+        default: throw PersonalEnvError.invalidRequest("TTL must look like 30s, 15m, or 1h.")
+        }
+    }
+
+    private static func formatDuration(_ duration: TimeInterval) -> String {
+        if duration.truncatingRemainder(dividingBy: 3600) == 0 {
+            return "\(Int(duration / 3600))h"
+        }
+        if duration.truncatingRemainder(dividingBy: 60) == 0 {
+            return "\(Int(duration / 60))m"
+        }
+        return "\(Int(duration))s"
+    }
+
+    private static func iso8601(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
     }
 
     private static func printHelp() {
@@ -93,6 +155,19 @@ struct PEnvCLI {
           penv scan <workspace-path>
           penv export <vault-id> [KEY...]
           penv list
+          penv approve <read|write> [--ttl 15m]
+          penv approvals
+          penv revoke
         """)
+    }
+}
+
+private extension ApprovalCapability {
+    init?(cliValue: String) {
+        switch cliValue {
+        case "read": self = .readSecrets
+        case "write": self = .writeSecrets
+        default: return nil
+        }
     }
 }

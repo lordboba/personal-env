@@ -5,17 +5,25 @@ public actor VaultService {
     private let store: SecretStoring
     private let authenticator: Authenticating
     private var state: AppState
+    private var hasLoadedSecretState = false
 
     public init(store: SecretStoring = KeychainStore(), authenticator: Authenticating = LocalAuthenticator()) throws {
         self.store = store
         self.authenticator = authenticator
-        var loadedState = try store.loadState()
+        var loadedState = try store.loadMetadata()
         Self.hydrateLegacyInventoryIfNeeded(&loadedState)
         self.state = loadedState
     }
 
     public func snapshot() -> AppState {
         state
+    }
+
+    public func reload(reason: String = "Reload Personal Env from Apple Keychain.") async throws {
+        if !hasLoadedSecretState {
+            try await authenticator.unlock(reason: reason, capability: .readSecrets)
+        }
+        try reloadSecretState()
     }
 
     public func duplicateHints() -> [DuplicateHint] {
@@ -41,12 +49,14 @@ public actor VaultService {
         .sorted { lhs, rhs in lhs.key < rhs.key }
     }
 
-    public func unlock(reason: String = "Unlock Personal Env to access your Keychain-backed environment variables.") async throws {
-        try await authenticator.unlock(reason: reason)
+    public func unlock(reason: String = "Unlock Personal Env to access your Keychain-backed environment variables.", capability: ApprovalCapability = .readSecrets) async throws {
+        try await authenticator.unlock(reason: reason, capability: capability)
+        try loadSecretStateIfNeeded()
     }
 
     @discardableResult
-    public func upsertVault(name: String, projectPath: String, dotenvFileName: String? = nil) throws -> EnvVault {
+    public func upsertVault(name: String, projectPath: String, dotenvFileName: String? = nil) async throws -> EnvVault {
+        try await unlock(reason: "Create or update a Personal Env vault.", capability: .writeSecrets)
         if let index = state.vaults.firstIndex(where: { $0.projectPath == projectPath }) {
             state.vaults[index].name = name
             if let dotenvFileName {
@@ -63,7 +73,8 @@ public actor VaultService {
     }
 
     @discardableResult
-    public func createProjectVault(name: String, parentDirectory: String) throws -> EnvVault {
+    public func createProjectVault(name: String, parentDirectory: String) async throws -> EnvVault {
+        try await unlock(reason: "Create a project and Personal Env vault.", capability: .writeSecrets)
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             throw PersonalEnvError.invalidRequest("Project name is required.")
@@ -81,11 +92,12 @@ public actor VaultService {
         try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
         try DotenvCodec.render([]).write(to: projectURL.appendingPathComponent(DotenvCodec.projectFileName), atomically: true, encoding: .utf8)
 
-        return try upsertVault(name: trimmedName, projectPath: projectURL.path, dotenvFileName: DotenvCodec.projectFileName)
+        return try upsertVaultWithoutUnlock(name: trimmedName, projectPath: projectURL.path, dotenvFileName: DotenvCodec.projectFileName)
     }
 
     @discardableResult
-    public func renameVault(vaultID: UUID, name: String) throws -> EnvVault {
+    public func renameVault(vaultID: UUID, name: String) async throws -> EnvVault {
+        try await unlock(reason: "Rename a Personal Env vault.", capability: .writeSecrets)
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             throw PersonalEnvError.invalidRequest("Vault name is required.")
@@ -100,7 +112,8 @@ public actor VaultService {
         return state.vaults[index]
     }
 
-    public func deleteVault(vaultID: UUID) throws {
+    public func deleteVault(vaultID: UUID) async throws {
+        try await unlock(reason: "Delete a Personal Env vault and its stored variables.", capability: .writeSecrets)
         guard let index = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
@@ -118,20 +131,20 @@ public actor VaultService {
     }
 
     public func importDotenv(_ text: String, vaultID: UUID, scope: String = "project") async throws {
-        try await unlock(reason: "Import environment variables into Apple Keychain.")
+        try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
         try importVariablesWithoutUnlock(DotenvCodec.parse(text, scope: scope), vaultID: vaultID)
     }
 
     public func importVariables(_ variables: [EnvVariable], vaultID: UUID) async throws {
-        try await unlock(reason: "Import environment variables into Apple Keychain.")
+        try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
         try importVariablesWithoutUnlock(variables, vaultID: vaultID)
     }
 
     public func importDetectedDotenvFiles(_ files: [DetectedDotenvFile], rootName: String? = nil) async throws {
-        try await unlock(reason: "Import environment variables into Apple Keychain.")
+        try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
         for file in files {
             let projectName = rootNameForFile(file, fallback: rootName)
-            let vault = try upsertVault(name: projectName, projectPath: file.projectPath, dotenvFileName: file.fileName)
+            let vault = try upsertVaultWithoutUnlock(name: projectName, projectPath: file.projectPath, dotenvFileName: file.fileName)
             try importVariablesWithoutUnlock(file.variables, vaultID: vault.id, dotenvFileName: file.fileName, source: file.path)
         }
     }
@@ -158,7 +171,7 @@ public actor VaultService {
     }
 
     public func setVariable(vaultID: UUID, key: String, value: String, scope: String = "project") async throws {
-        try await unlock(reason: "Store \(key) in Apple Keychain.")
+        try await unlock(reason: "Store \(key) in Apple Keychain.", capability: .writeSecrets)
         guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
@@ -174,7 +187,7 @@ public actor VaultService {
     }
 
     public func updateVariable(vaultID: UUID, variableID: UUID, key: String, value: String, scope: String = "project") async throws {
-        try await unlock(reason: "Update \(key) in Apple Keychain.")
+        try await unlock(reason: "Update \(key) in Apple Keychain.", capability: .writeSecrets)
         guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
@@ -189,7 +202,7 @@ public actor VaultService {
     }
 
     public func exportDotenv(vaultID: UUID, keys: [String]? = nil) async throws -> String {
-        try await unlock(reason: "Export environment variables from Apple Keychain.")
+        try await unlock(reason: "Export environment variables from Apple Keychain.", capability: .readSecrets)
         guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
@@ -204,6 +217,36 @@ public actor VaultService {
 
     private func persist() throws {
         try store.saveState(state)
+    }
+
+    private func loadSecretStateIfNeeded() throws {
+        guard !hasLoadedSecretState else { return }
+        try reloadSecretState()
+    }
+
+    private func reloadSecretState() throws {
+        var loadedState = try store.loadState()
+        Self.hydrateLegacyInventoryIfNeeded(&loadedState)
+        state = loadedState
+        hasLoadedSecretState = true
+        try store.saveMetadata(loadedState)
+    }
+
+    @discardableResult
+    private func upsertVaultWithoutUnlock(name: String, projectPath: String, dotenvFileName: String? = nil) throws -> EnvVault {
+        if let index = state.vaults.firstIndex(where: { $0.projectPath == projectPath }) {
+            state.vaults[index].name = name
+            if let dotenvFileName {
+                state.vaults[index].dotenvFileName = dotenvFileName
+            }
+            state.vaults[index].updatedAt = Date()
+            try persist()
+            return state.vaults[index]
+        }
+        let vault = EnvVault(name: name, projectPath: projectPath, dotenvFileName: dotenvFileName)
+        state.vaults.append(vault)
+        try persist()
+        return vault
     }
 
     private static func hydrateLegacyInventoryIfNeeded(_ state: inout AppState) {
