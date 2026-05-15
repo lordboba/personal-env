@@ -30,6 +30,57 @@ APPLE_ID="${PERSONAL_ENV_APPLE_ID:-}"
 APPLE_TEAM_ID="${PERSONAL_ENV_APPLE_TEAM_ID:-}"
 APPLE_APP_PASSWORD="${PERSONAL_ENV_APPLE_APP_PASSWORD:-}"
 APPLY_DMG_LAYOUT="${PERSONAL_ENV_APPLY_DMG_LAYOUT:-1}"
+DMG_DEVICE=""
+DMG_VOLUME=""
+
+close_dmg_finder_window() {
+  osascript <<OSA >/dev/null 2>&1 || true
+tell application "Finder"
+  try
+    close container window of disk "$APP_NAME"
+  end try
+end tell
+OSA
+}
+
+detach_dmg() {
+  local device="$1"
+  local volume="${2:-}"
+  local attempt
+  local delay_seconds
+
+  close_dmg_finder_window
+  sync
+
+  for attempt in 1 2 3 4 5; do
+    if hdiutil detach "$device"; then
+      return 0
+    fi
+
+    if [[ -n "$volume" ]]; then
+      diskutil unmount "$volume" >/dev/null 2>&1 || true
+    fi
+
+    delay_seconds=$((attempt * 2))
+    echo "Waiting ${delay_seconds}s before retrying DMG detach for $device..." >&2
+    sleep "$delay_seconds"
+    close_dmg_finder_window
+    sync
+  done
+
+  echo "Forcing DMG detach for $device after repeated graceful detach failures." >&2
+  hdiutil detach -force "$device"
+}
+
+cleanup_attached_dmg() {
+  if [[ -n "$DMG_DEVICE" ]]; then
+    detach_dmg "$DMG_DEVICE" "$DMG_VOLUME" >/dev/null 2>&1 || true
+    DMG_DEVICE=""
+    DMG_VOLUME=""
+  fi
+}
+
+trap cleanup_attached_dmg EXIT
 
 require_notarization_config() {
   if [[ -z "$SIGN_IDENTITY" ]]; then
@@ -212,15 +263,15 @@ hdiutil create \
 
 if [[ "$APPLY_DMG_LAYOUT" == "1" ]]; then
   ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW" -readwrite -noverify -noautoopen)"
-  DEVICE="$(awk '/\/Volumes\/Personal Env/ {device=$1} END {print device}' <<<"$ATTACH_OUTPUT")"
-  if [[ -z "$DEVICE" ]]; then
+  DMG_DEVICE="$(awk '/\/Volumes\/Personal Env/ {device=$1} END {print device}' <<<"$ATTACH_OUTPUT")"
+  if [[ -z "$DMG_DEVICE" ]]; then
     echo "$ATTACH_OUTPUT" >&2
     echo "Failed to find attached DMG device for $APP_NAME." >&2
     exit 1
   fi
-  VOLUME="/Volumes/$APP_NAME"
-  if [[ ! -d "$VOLUME" ]]; then
-    VOLUME="$(awk '/\/Volumes\/Personal Env/ {for (i=3; i<=NF; i++) path = path (i == 3 ? "" : " ") $i} END {print path}' <<<"$ATTACH_OUTPUT")"
+  DMG_VOLUME="/Volumes/$APP_NAME"
+  if [[ ! -d "$DMG_VOLUME" ]]; then
+    DMG_VOLUME="$(awk '/\/Volumes\/Personal Env/ {for (i=3; i<=NF; i++) path = path (i == 3 ? "" : " ") $i} END {print path}' <<<"$ATTACH_OUTPUT")"
   fi
   sleep 2
   osascript <<OSA
@@ -234,7 +285,7 @@ tell application "Finder"
     set theViewOptions to the icon view options of container window
     set arrangement of theViewOptions to not arranged
     set icon size of theViewOptions to 144
-    set background picture of theViewOptions to (POSIX file "$VOLUME/.background/background.png" as alias)
+    set background picture of theViewOptions to (POSIX file "$DMG_VOLUME/.background/background.png" as alias)
     set position of item "$APP_NAME.app" of container window to {246, 360}
     set position of item "Applications" of container window to {826, 360}
     close
@@ -245,7 +296,9 @@ tell application "Finder"
   end tell
 end tell
 OSA
-  hdiutil detach "$DEVICE"
+  detach_dmg "$DMG_DEVICE" "$DMG_VOLUME"
+  DMG_DEVICE=""
+  DMG_VOLUME=""
 fi
 hdiutil convert "$DMG_RW" -format UDZO -o "$DOWNLOAD_DMG" -ov
 rm -rf "$DMG_STAGING_DIR" "$DMG_RW"
