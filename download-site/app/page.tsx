@@ -25,6 +25,12 @@ export default function Home() {
     "--title-x": "34%",
     "--title-y": "42%",
   } as CSSProperties;
+  const defaultGlass = {
+    "--glass-rotate-x": "0deg",
+    "--glass-rotate-y": "0deg",
+    "--glass-depth-x": "0px",
+    "--glass-depth-y": "0px",
+  } as CSSProperties;
 
   function moveTextLight(event: PointerEvent<HTMLElement>) {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -41,6 +47,40 @@ export default function Home() {
   function resetTextLight(event: PointerEvent<HTMLElement>) {
     event.currentTarget.style.setProperty("--title-x", "34%");
     event.currentTarget.style.setProperty("--title-y", "42%");
+  }
+
+  function moveGlass(event: PointerEvent<HTMLElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = (event.clientX - bounds.left) / bounds.width;
+    const y = (event.clientY - bounds.top) / bounds.height;
+    const clampedX = Math.min(Math.max(x, 0), 1);
+    const clampedY = Math.min(Math.max(y, 0), 1);
+    const normalizedX = clampedX * 2 - 1;
+    const normalizedY = clampedY * 2 - 1;
+
+    event.currentTarget.style.setProperty(
+      "--glass-rotate-x",
+      `${(-normalizedY * 10).toFixed(2)}deg`,
+    );
+    event.currentTarget.style.setProperty(
+      "--glass-rotate-y",
+      `${(normalizedX * 13).toFixed(2)}deg`,
+    );
+    event.currentTarget.style.setProperty(
+      "--glass-depth-x",
+      `${(normalizedX * 14).toFixed(2)}px`,
+    );
+    event.currentTarget.style.setProperty(
+      "--glass-depth-y",
+      `${(normalizedY * 11).toFixed(2)}px`,
+    );
+  }
+
+  function resetGlass(event: PointerEvent<HTMLElement>) {
+    event.currentTarget.style.setProperty("--glass-rotate-x", "0deg");
+    event.currentTarget.style.setProperty("--glass-rotate-y", "0deg");
+    event.currentTarget.style.setProperty("--glass-depth-x", "0px");
+    event.currentTarget.style.setProperty("--glass-depth-y", "0px");
   }
 
   return (
@@ -111,36 +151,50 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="liquidPane" aria-hidden="true">
+        <div
+          className="liquidPane"
+          aria-hidden="true"
+          onPointerCancel={resetGlass}
+          onPointerDown={moveGlass}
+          onPointerLeave={resetGlass}
+          onPointerMove={moveGlass}
+          onPointerUp={resetGlass}
+          style={defaultGlass}
+        >
           <div className="productWindow glass">
-            <div className="windowTop">
-              <div className="traffic">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="scope">All Environments</div>
-              <div className="search">Search</div>
-            </div>
-            <div className="windowBody">
-              <div className="tableHeader">
-                <span>Key</span>
-                <span>Value</span>
-                <span>Environment</span>
-              </div>
-              {secrets.map(([key, environment]) => (
-                <div className="keyRow" key={key}>
-                  <strong>{key}</strong>
-                  <span className="dots">••••••••••••••••</span>
-                  <span className={`badge ${environment.toLowerCase()}`}>
-                    {environment}
-                  </span>
+            <div className="productWindowScene">
+              <div className="windowTop">
+                <div className="traffic">
+                  <span />
+                  <span />
+                  <span />
                 </div>
-              ))}
-            </div>
-            <div className="windowFoot">
-              <span>+ New Variable</span>
-              <span>7 variables · Locked</span>
+                <div className="scope">All Environments</div>
+                <div className="search">Search</div>
+              </div>
+              <div className="windowBody">
+                <div className="tableHeader">
+                  <span>Key</span>
+                  <span>Value</span>
+                  <span>Environment</span>
+                </div>
+                {secrets.map(([key, environment], index) => (
+                  <div
+                    className={index > 3 ? "keyRow optionalRow" : "keyRow"}
+                    key={key}
+                  >
+                    <strong>{key}</strong>
+                    <span className="dots">••••••••••••••••</span>
+                    <span className={`badge ${environment.toLowerCase()}`}>
+                      {environment}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="windowFoot">
+                <span>+ New Variable</span>
+                <span>7 variables · Locked</span>
+              </div>
             </div>
           </div>
         </div>

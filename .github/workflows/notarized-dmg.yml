@@ -18,9 +18,47 @@ permissions:
   contents: write
 
 jobs:
+  release-impact:
+    name: Detect native app release impact
+    runs-on: ubuntu-latest
+    outputs:
+      should_notarize: ${{ steps.detect.outputs.should_notarize }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect native app and release pipeline changes
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" || "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            echo "should_notarize=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          before="${{ github.event.before }}"
+          if [[ -z "$before" || "$before" =~ ^0+$ ]]; then
+            echo "should_notarize=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git cat-file -e "$before^{commit}"; then
+            echo "should_notarize=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          should_notarize="$(git diff --name-only "$before" "$GITHUB_SHA" | bash scripts/detect-release-impact.sh)"
+          echo "should_notarize=$should_notarize" >> "$GITHUB_OUTPUT"
+
   notarize:
     name: Sign and notarize macOS DMG
-    if: ${{ github.actor != 'github-actions[bot]' }}
+    needs: release-impact
+    if: ${{ github.actor != 'github-actions[bot]' && needs.release-impact.outputs.should_notarize == 'true' }}
     runs-on: macos-15
     timeout-minutes: 45
 

@@ -7,6 +7,14 @@ LOG_FILE="/tmp/personal-env-post-commit.log"
 BACKUP_DIR="$(mktemp -d)"
 BACKUP_DMG="$BACKUP_DIR/Personal-Env-macOS.dmg"
 
+cd "$ROOT_DIR"
+
+if [[ "$(git diff-tree --no-commit-id --name-only -r --root HEAD | bash scripts/detect-release-impact.sh)" != "true" ]]; then
+  echo "post-commit: native app packaging smoke test skipped; commit did not change app or release pipeline files"
+  rm -rf "$BACKUP_DIR"
+  exit 0
+fi
+
 restore_dmg() {
   if [[ -f "$BACKUP_DMG" ]]; then
     cp "$BACKUP_DMG" "$DOWNLOAD_DMG"
