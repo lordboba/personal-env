@@ -7,10 +7,10 @@
     <language>en</language>
     <item>
       <title>Version 0.1.0</title>
-      <pubDate>Fri, 15 May 2026 21:28:24 +0000</pubDate>
-      <sparkle:version>21</sparkle:version>
+      <pubDate>Wed, 20 May 2026 08:26:12 +0000</pubDate>
+      <sparkle:version>22</sparkle:version>
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-      <enclosure url="https://personal-env.vercel.app/downloads/Personal-Env-macOS.dmg" type="application/octet-stream" sparkle:edSignature="vyCfMHsooxNA48maWk7V1Auyx4NP+KQohkc4vvzvfTmD9eyLpzDb7Qb++hy6KrD2K7LjM2JqRvCELOB3R34vBg==" length="4259545" />
+      <enclosure url="https://personal-env.vercel.app/downloads/Personal-Env-macOS.dmg" type="application/octet-stream" sparkle:edSignature="iz4/qZ8Ov5ckhkAD1OX05kKVPeLyODCFuEG6R8ZZmIsvIfHWFxOKGfvq7DbxxC8E37araI5Rodf+NkrpaVHZCg==" length="4287040" />
     </item>
   </channel>
 </rss>
