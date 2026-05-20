@@ -64,6 +64,58 @@ public enum DotenvCodec {
             .joined(separator: "\n") + "\n"
     }
 
+    public static func patch(_ text: String, upserting variables: [EnvVariable], removingKeys: Set<String> = []) -> String {
+        var upserts: [String: String] = [:]
+        var orderedUpsertKeys: [String] = []
+        for variable in variables {
+            if upserts[variable.key] == nil {
+                orderedUpsertKeys.append(variable.key)
+            }
+            upserts[variable.key] = "\(variable.key)=\(quoteIfNeeded(variable.value))"
+        }
+        let keysToPatch = Set(upserts.keys).union(removingKeys)
+        guard !keysToPatch.isEmpty else { return text }
+
+        var lines = splitPreservingLineEndings(text)
+        let hadTrailingNewline = text.last?.isNewline == true
+        let originalLineCount = lines.count
+        var insertedKeys = Set<String>()
+        var patchedLines: [String] = []
+
+        for line in lines {
+            guard let key = assignmentKey(in: line), keysToPatch.contains(key) else {
+                patchedLines.append(line)
+                continue
+            }
+
+            if let replacement = upserts[key], !insertedKeys.contains(key) {
+                patchedLines.append(replacement + line.lineEnding)
+                insertedKeys.insert(key)
+            }
+        }
+
+        let missingUpsertKeys = orderedUpsertKeys.filter { !insertedKeys.contains($0) }
+        if !missingUpsertKeys.isEmpty {
+            if !patchedLines.isEmpty, !patchedLines[patchedLines.count - 1].isEmpty {
+                patchedLines[patchedLines.count - 1] += "\n"
+            }
+            for key in missingUpsertKeys {
+                if let replacement = upserts[key] {
+                    patchedLines.append("\(replacement)\n")
+                }
+            }
+        }
+
+        lines = patchedLines
+        if lines.isEmpty {
+            return ""
+        }
+        if !hadTrailingNewline, missingUpsertKeys.isEmpty, originalLineCount == lines.count, let last = lines.last {
+            lines[lines.count - 1] = last.trimmingTrailingNewlines()
+        }
+        return lines.joined()
+    }
+
     public static func scanFiles(inDirectory directoryPath: String) throws -> [DetectedDotenvFile] {
         let expandedPath = NSString(string: directoryPath).expandingTildeInPath
         let directoryURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
@@ -245,6 +297,62 @@ public enum DotenvCodec {
         }
         guard needsQuotes else { return value }
         return "\"\(value.replacingOccurrences(of: "\"", with: "\\\""))\""
+    }
+
+    private static func assignmentKey(in line: String) -> String? {
+        var line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty, !line.hasPrefix("#") else { return nil }
+        if line.hasPrefix("export ") {
+            line.removeFirst("export ".count)
+            line = line.trimmingCharacters(in: .whitespaces)
+        }
+        guard let equals = line.firstIndex(of: "=") else { return nil }
+        let key = String(line[..<equals]).trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return nil }
+        return key
+    }
+
+    private static func splitPreservingLineEndings(_ text: String) -> [String] {
+        guard !text.isEmpty else { return [] }
+        var lines: [String] = []
+        var current = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            current.append(character)
+            index = text.index(after: index)
+            if character == "\r", index < text.endIndex, text[index] == "\n" {
+                current.append(text[index])
+                index = text.index(after: index)
+                lines.append(current)
+                current = ""
+            } else if character == "\n" || character == "\r" {
+                lines.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty {
+            lines.append(current)
+        }
+        return lines
+    }
+}
+
+private extension String {
+    var lineEnding: String {
+        if hasSuffix("\r\n") {
+            return "\r\n"
+        }
+        guard let last, last == "\n" || last == "\r" else { return "" }
+        return String(last)
+    }
+
+    func trimmingTrailingNewlines() -> String {
+        var result = self
+        while result.last == "\n" || result.last == "\r" {
+            result.removeLast()
+        }
+        return result
     }
 }
 

@@ -34,6 +34,19 @@ struct PEnvCLI {
             let scope = args[3]
             try await service.setVariable(vaultID: vaultID, key: key, value: value, scope: scope)
             print("stored \(key)")
+        case "remove":
+            guard args.count >= 2 else { throw PersonalEnvError.invalidRequest("Usage: penv remove <vault-id> <KEY>") }
+            let vaultID = try parseUUID(args[0])
+            let key = args[1]
+            let state = await service.snapshot()
+            guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
+                throw PersonalEnvError.vaultNotFound
+            }
+            guard let variable = vault.variables.first(where: { $0.key == key }) else {
+                throw PersonalEnvError.variableNotFound(key)
+            }
+            try await service.deleteVariable(vaultID: vaultID, variableID: variable.id)
+            print("removed \(key)")
         case "import":
             guard args.count >= 2 else { throw PersonalEnvError.invalidRequest("Usage: penv import <vault-id> <dotenv-path>") }
             let vaultID = try parseUUID(args[0])
@@ -151,6 +164,7 @@ struct PEnvCLI {
         Commands:
           penv vault <name> <project-path>
           penv set <vault-id> <KEY> <VALUE> <scope>
+          penv remove <vault-id> <KEY>
           penv import <vault-id> <dotenv-path>
           penv scan <workspace-path>
           penv export <vault-id> [KEY...]

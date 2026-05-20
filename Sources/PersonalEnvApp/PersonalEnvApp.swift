@@ -467,6 +467,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func deleteVariable(_ variable: EnvVariable) async {
+        guard let service, let vault = selectedVault else { return }
+        do {
+            isWorking = true
+            defer { isWorking = false }
+            try await service.deleteVariable(vaultID: vault.id, variableID: variable.id)
+            state = await service.snapshot()
+            duplicateHints = await service.duplicateHints()
+            selectedVariableID = state.vaults.first { $0.id == vault.id }?.variables.first?.id
+            status = "Removed \(variable.key)"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func importDotenv(url: URL) async {
         guard let service, let vault = selectedVault else { return }
         do {
@@ -673,6 +688,7 @@ struct ContentView: View {
     @State private var vaultToRename: EnvVault?
     @State private var vaultRenameName = ""
     @State private var vaultToDelete: EnvVault?
+    @State private var variablePendingDelete: EnvVariable?
     @State private var shouldReloadAfterActivation = false
 
     var body: some View {
@@ -728,6 +744,18 @@ struct ContentView: View {
             }
         } message: {
             Text("This removes the vault from your Personal Env config. It does not delete the project folder or dotenv file.")
+        }
+        .confirmationDialog("Remove Variable", isPresented: Binding(get: { variablePendingDelete != nil }, set: { if !$0 { variablePendingDelete = nil } })) {
+            Button("Remove from Vault and .env", role: .destructive) {
+                guard let variable = variablePendingDelete else { return }
+                variablePendingDelete = nil
+                Task { await model.deleteVariable(variable) }
+            }
+            Button("Cancel", role: .cancel) {
+                variablePendingDelete = nil
+            }
+        } message: {
+            Text("This removes the selected key from Personal Env and from the vault's tracked dotenv file.")
         }
         .tint(EnvTheme.accent)
         .sheet(isPresented: $showTutorial, onDismiss: { hasSeenWelcomeTutorial = true }) {
@@ -1556,6 +1584,12 @@ struct ContentView: View {
                     } label: {
                         Label("Reset", systemImage: "arrow.counterclockwise")
                     }
+                    Button(role: .destructive) {
+                        variablePendingDelete = model.selectedVariable
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                    .disabled(model.selectedVariable == nil)
                     Spacer()
                     Button {
                         let key = editKey.trimmingCharacters(in: .whitespacesAndNewlines)

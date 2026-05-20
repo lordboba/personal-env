@@ -15,6 +15,33 @@ import Testing
     #expect(DotenvCodec.render(variables).contains("OPENAI_API_KEY=\"sk-test value\""))
 }
 
+@Test func dotenvPatchPreservesUnrelatedLinesAndAppendsMissingKeys() throws {
+    let patched = DotenvCodec.patch("""
+    # keep this
+    EXISTING=old
+    UNMANAGED=value
+    """, upserting: [
+        EnvVariable(key: "EXISTING", value: "new value"),
+        EnvVariable(key: "ADDED", value: "fresh")
+    ])
+
+    #expect(patched.contains("# keep this\n"))
+    #expect(patched.contains("EXISTING=\"new value\"\n"))
+    #expect(patched.contains("UNMANAGED=value\n"))
+    #expect(patched.hasSuffix("ADDED=fresh\n"))
+    #expect(!patched.contains("EXISTING=old"))
+}
+
+@Test func dotenvPatchRemovesAllAssignmentsForDeletedKey() throws {
+    let patched = DotenvCodec.patch("""
+    REMOVE_ME=first
+    KEEP_ME=true
+    export REMOVE_ME=second
+    """, upserting: [], removingKeys: ["REMOVE_ME"])
+
+    #expect(patched == "KEEP_ME=true\n")
+}
+
 @Test func exportFiltersRequestedKeys() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
     let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
@@ -218,6 +245,59 @@ import Testing
     let dotenvURL = parentURL.appendingPathComponent("ExampleApp").appendingPathComponent(".env")
     let dotenv = try String(contentsOf: dotenvURL, encoding: .utf8)
     #expect(dotenv.contains("OPENAI_API_KEY=sk-test"))
+}
+
+@Test func setVariableAppendsToTrackedDotenvWithoutRewritingUnmanagedContent() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    try "# owner note\nUNMANAGED=keep\n".write(to: projectURL.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path, dotenvFileName: ".env")
+
+    try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk test", scope: "ai")
+
+    let dotenv = try String(contentsOf: projectURL.appendingPathComponent(".env"), encoding: .utf8)
+    #expect(dotenv.contains("# owner note\n"))
+    #expect(dotenv.contains("UNMANAGED=keep\n"))
+    #expect(dotenv.hasSuffix("OPENAI_API_KEY=\"sk test\"\n"))
+}
+
+@Test func updateVariableRenamesTrackedDotenvAssignment() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    try "OLD_KEY=old\nKEEP_ME=true\n".write(to: projectURL.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path, dotenvFileName: ".env")
+    try await service.setVariable(vaultID: vault.id, key: "OLD_KEY", value: "old", scope: "project")
+    let snapshot = await service.snapshot()
+    let variable = try #require(snapshot.vaults.first?.variables.first)
+
+    try await service.updateVariable(vaultID: vault.id, variableID: variable.id, key: "NEW_KEY", value: "new", scope: "project")
+
+    let dotenv = try String(contentsOf: projectURL.appendingPathComponent(".env"), encoding: .utf8)
+    #expect(!dotenv.contains("OLD_KEY="))
+    #expect(dotenv.contains("NEW_KEY=new\n"))
+    #expect(dotenv.contains("KEEP_ME=true\n"))
+}
+
+@Test func deleteVariableRemovesTrackedDotenvAssignment() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    try "REMOVE_ME=secret\nKEEP_ME=true\n".write(to: projectURL.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path, dotenvFileName: ".env")
+    try await service.setVariable(vaultID: vault.id, key: "REMOVE_ME", value: "secret", scope: "project")
+    let snapshot = await service.snapshot()
+    let variable = try #require(snapshot.vaults.first?.variables.first)
+
+    try await service.deleteVariable(vaultID: vault.id, variableID: variable.id)
+
+    let dotenv = try String(contentsOf: projectURL.appendingPathComponent(".env"), encoding: .utf8)
+    #expect(!dotenv.contains("REMOVE_ME="))
+    #expect(dotenv == "KEEP_ME=true\n")
 }
 
 @Test func authorizationGrantExpiresAndWriteImpliesRead() throws {
