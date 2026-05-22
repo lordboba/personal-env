@@ -134,17 +134,21 @@ public actor VaultService {
 
     public func importDotenv(_ text: String, vaultID: UUID, scope: String = "project") async throws {
         try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
-        try importVariablesWithoutUnlock(DotenvCodec.parse(text, scope: scope), vaultID: vaultID)
+        let variables = DotenvCodec.parse(text, scope: scope)
+        try validateDotenvKeys(variables)
+        try importVariablesWithoutUnlock(variables, vaultID: vaultID)
     }
 
     public func importVariables(_ variables: [EnvVariable], vaultID: UUID) async throws {
         try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
+        try validateDotenvKeys(variables)
         try importVariablesWithoutUnlock(variables, vaultID: vaultID)
     }
 
     public func importDetectedDotenvFiles(_ files: [DetectedDotenvFile], rootName: String? = nil) async throws {
         try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
         for file in files {
+            try validateDotenvKeys(file.variables)
             let projectName = rootNameForFile(file, fallback: rootName)
             let vault = try upsertVaultWithoutUnlock(name: projectName, projectPath: file.projectPath, dotenvFileName: file.fileName)
             try importVariablesWithoutUnlock(file.variables, vaultID: vault.id, dotenvFileName: file.fileName, source: file.path)
@@ -159,6 +163,7 @@ public actor VaultService {
         guard let index = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
+        let previousState = state
         for variable in variables {
             let trackedVariable = variableWithTrackedSecret(variable, vaultIndex: index, dotenvFileName: dotenvFileName, source: source)
             if let existing = state.vaults[index].variables.firstIndex(where: { $0.key == trackedVariable.key }) {
@@ -168,16 +173,16 @@ public actor VaultService {
             }
         }
         state.vaults[index].updatedAt = Date()
-        try persist()
-        try patchDotenvFileIfNeeded(vaultIndex: index, upserting: variables)
+        try commitStateWithDotenvPatch(vaultIndex: index, upserting: variables, previousState: previousState)
     }
 
     public func setVariable(vaultID: UUID, key: String, value: String, scope: String = "project") async throws {
         try await unlock(reason: "Store \(key) in Apple Keychain.", capability: .writeSecrets)
-        try Self.validateDotenvKey(key)
+        try DotenvKeyValidator.validate(key)
         guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
+        let previousState = state
         let variable = variableWithTrackedSecret(EnvVariable(key: key, value: value, scope: scope), vaultIndex: vaultIndex, dotenvFileName: state.vaults[vaultIndex].dotenvFileName, source: "manual")
         if let variableIndex = state.vaults[vaultIndex].variables.firstIndex(where: { $0.key == key }) {
             state.vaults[vaultIndex].variables[variableIndex] = variable
@@ -185,28 +190,30 @@ public actor VaultService {
             state.vaults[vaultIndex].variables.append(variable)
         }
         state.vaults[vaultIndex].updatedAt = Date()
-        try persist()
-        try patchDotenvFileIfNeeded(vaultIndex: vaultIndex, upserting: [variable])
+        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, upserting: [variable], previousState: previousState)
     }
 
     public func updateVariable(vaultID: UUID, variableID: UUID, key: String, value: String, scope: String = "project") async throws {
         try await unlock(reason: "Update \(key) in Apple Keychain.", capability: .writeSecrets)
-        try Self.validateDotenvKey(key)
+        try DotenvKeyValidator.validate(key)
         guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
         guard let variableIndex = state.vaults[vaultIndex].variables.firstIndex(where: { $0.id == variableID }) else {
             throw PersonalEnvError.variableNotFound(key)
         }
+        if state.vaults[vaultIndex].variables.contains(where: { $0.id != variableID && $0.key == key }) {
+            throw PersonalEnvError.invalidRequest("A variable named \(key) already exists in this vault.")
+        }
+        let previousState = state
         let oldKey = state.vaults[vaultIndex].variables[variableIndex].key
         let variable = variableWithTrackedSecret(EnvVariable(id: variableID, key: key, value: value, scope: scope), vaultIndex: vaultIndex, dotenvFileName: state.vaults[vaultIndex].dotenvFileName, source: "manual")
         state.vaults[vaultIndex].variables[variableIndex] = variable
         if oldKey != key {
-            removeTrackedUses(vaultIndex: vaultIndex, keys: [oldKey], excludingSecretIDs: [variableID])
+            removeTrackedUses(vaultIndex: vaultIndex, keys: [oldKey])
         }
         state.vaults[vaultIndex].updatedAt = Date()
-        try persist()
-        try patchDotenvFileIfNeeded(vaultIndex: vaultIndex, upserting: [variable], removingKeys: oldKey == key ? [] : [oldKey])
+        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, upserting: [variable], removingKeys: oldKey == key ? [] : [oldKey], previousState: previousState)
     }
 
     public func deleteVariable(vaultID: UUID, variableID: UUID) async throws {
@@ -217,11 +224,11 @@ public actor VaultService {
         guard let variableIndex = state.vaults[vaultIndex].variables.firstIndex(where: { $0.id == variableID }) else {
             throw PersonalEnvError.variableNotFound(variableID.uuidString)
         }
+        let previousState = state
         let variable = state.vaults[vaultIndex].variables.remove(at: variableIndex)
-        removeTrackedUses(vaultIndex: vaultIndex, keys: [variable.key], excludingSecretIDs: [])
+        removeTrackedUses(vaultIndex: vaultIndex, keys: [variable.key])
         state.vaults[vaultIndex].updatedAt = Date()
-        try persist()
-        try patchDotenvFileIfNeeded(vaultIndex: vaultIndex, removingKeys: [variable.key])
+        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, removingKeys: [variable.key], previousState: previousState)
     }
 
     public func exportDotenv(vaultID: UUID, keys: [String]? = nil) async throws -> String {
@@ -258,12 +265,11 @@ public actor VaultService {
         return liveVariableIDs.union(trackedUseSecretIDs)
     }
 
-    private func removeTrackedUses(vaultIndex: Int, keys: Set<String>, excludingSecretIDs: Set<UUID>) {
+    private func removeTrackedUses(vaultIndex: Int, keys: Set<String>) {
         let vault = state.vaults[vaultIndex]
         state.projectSecretUses.removeAll { use in
             use.projectPath == vault.projectPath &&
-                keys.contains(use.key) &&
-                !excludingSecretIDs.contains(use.secretID ?? UUID())
+                keys.contains(use.key)
         }
     }
 
@@ -365,28 +371,62 @@ public actor VaultService {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func validateDotenvKey(_ key: String) throws {
-        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedKey == key, !key.isEmpty else {
-            throw PersonalEnvError.invalidRequest("Environment variable keys cannot be empty or padded with whitespace.")
-        }
-        let allowedScalars = key.unicodeScalars.allSatisfy { scalar in
-            CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
-        }
-        guard allowedScalars, key.unicodeScalars.first.map({ CharacterSet.letters.contains($0) || $0 == "_" }) == true else {
-            throw PersonalEnvError.invalidRequest("Environment variable keys must start with a letter or underscore and contain only letters, numbers, and underscores.")
+    private func validateDotenvKeys(_ variables: [EnvVariable]) throws {
+        for variable in variables {
+            try DotenvKeyValidator.validate(variable.key)
         }
     }
 
-    private func patchDotenvFileIfNeeded(vaultIndex: Int, upserting variables: [EnvVariable] = [], removingKeys: Set<String> = []) throws {
+    private func commitStateWithDotenvPatch(
+        vaultIndex: Int,
+        upserting variables: [EnvVariable] = [],
+        removingKeys: Set<String> = [],
+        previousState: AppState
+    ) throws {
+        var appliedPatch: DotenvFilePatch?
+        do {
+            let patch = try makeDotenvFilePatch(vaultIndex: vaultIndex, upserting: variables, removingKeys: removingKeys)
+            try patch?.apply()
+            appliedPatch = patch
+            try persist()
+        } catch {
+            state = previousState
+            if let appliedPatch {
+                try? appliedPatch.restoreOriginal()
+            }
+            throw error
+        }
+    }
+
+    private func makeDotenvFilePatch(vaultIndex: Int, upserting variables: [EnvVariable] = [], removingKeys: Set<String> = []) throws -> DotenvFilePatch? {
         let vault = state.vaults[vaultIndex]
-        guard let dotenvFileName = vault.dotenvFileName else { return }
+        guard let dotenvFileName = vault.dotenvFileName else { return nil }
 
         let directoryURL = URL(fileURLWithPath: NSString(string: vault.projectPath).expandingTildeInPath, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let dotenvURL = directoryURL.appendingPathComponent(dotenvFileName)
-        let existingText = (try? String(contentsOf: dotenvURL, encoding: .utf8)) ?? ""
-        let patchedText = DotenvCodec.patch(existingText, upserting: variables, removingKeys: removingKeys)
-        try patchedText.write(to: dotenvURL, atomically: true, encoding: .utf8)
+        let originalText = FileManager.default.fileExists(atPath: dotenvURL.path)
+            ? try String(contentsOf: dotenvURL, encoding: .utf8)
+            : nil
+        let patchedText = DotenvCodec.patch(originalText ?? "", upserting: variables, removingKeys: removingKeys)
+        return DotenvFilePatch(url: dotenvURL, originalText: originalText, patchedText: patchedText)
+    }
+}
+
+private struct DotenvFilePatch {
+    var url: URL
+    var originalText: String?
+    var patchedText: String
+
+    func apply() throws {
+        try patchedText.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func restoreOriginal() throws {
+        if let originalText {
+            try originalText.write(to: url, atomically: true, encoding: .utf8)
+        } else if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
     }
 }

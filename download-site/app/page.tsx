@@ -4,7 +4,7 @@ import type { CSSProperties, PointerEvent } from "react";
 
 const features = [
   { label: "End-to-end encrypted", detail: "Secrets stay on your device" },
-  { label: "CLI native", detail: "Use it in your existing workflow" },
+  { label: "CLI included", detail: "The penv binary ships in the DMG" },
   { label: "Private by design", detail: "No telemetry. Ever." },
 ];
 
@@ -126,7 +126,8 @@ export default function Home() {
             style={defaultLight}
           >
             Store project files and text blobs behind device authentication,
-            then import, edit, and export clean .env files.
+            then import, edit, and export clean .env files. One DMG includes
+            the native app and bundled penv CLI.
           </p>
           <div className="actions">
             <a
@@ -137,7 +138,7 @@ export default function Home() {
               style={defaultLight}
             >
               <span className="appleMark" aria-hidden="true" />
-              Download for macOS
+              Download app + CLI
             </a>
             <a
               className="secondary"
@@ -149,6 +150,7 @@ export default function Home() {
               View source
             </a>
           </div>
+          <p className="downloadNote">Single macOS download. CLI included.</p>
         </div>
 
         <div

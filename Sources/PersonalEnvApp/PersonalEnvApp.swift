@@ -452,6 +452,28 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func importPastedDotenv(_ variables: [EnvVariable]) async {
+        guard let service, let vault = selectedVault else { return }
+        guard !variables.isEmpty else {
+            errorMessage = "Paste at least one valid environment variable."
+            return
+        }
+
+        do {
+            isWorking = true
+            defer { isWorking = false }
+            try await service.importVariables(variables, vaultID: vault.id)
+            state = await service.snapshot()
+            duplicateHints = await service.duplicateHints()
+            selectedVariableID = state.vaults.first { $0.id == vault.id }?.variables.first { variable in
+                variables.contains { $0.key == variable.key }
+            }?.id
+            status = variables.count == 1 ? "Saved \(variables[0].key)" : "Saved \(variables.count) variables"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func updateSelectedVariable(key: String, value: String, scope: String) async {
         guard let service, let vault = selectedVault, let variableID = selectedVariableID else { return }
         do {
@@ -566,6 +588,13 @@ fileprivate enum SearchFocusField: Hashable {
     case allVariableExcludeVaults
 }
 
+fileprivate enum AddVariableMode: String, CaseIterable, Identifiable {
+    case single = "Single Key"
+    case paste = "Paste .env"
+
+    var id: String { rawValue }
+}
+
 fileprivate struct SearchFocusRequest: Equatable {
     let id = UUID()
     let field: SearchFocusField
@@ -657,6 +686,8 @@ struct ContentView: View {
     @State private var newKey = ""
     @State private var newValue = ""
     @State private var newScope = "project"
+    @State private var addVariableMode: AddVariableMode = .single
+    @State private var pastedDotenvText = ""
     @State private var hoveredVariableID: EnvVariable.ID?
     @State private var hoveredDetailRow: String?
     @State private var copiedVariableValueID: EnvVariable.ID?
@@ -746,7 +777,7 @@ struct ContentView: View {
             Text("This removes the vault from your Personal Env config. It does not delete the project folder or dotenv file.")
         }
         .confirmationDialog("Remove Variable", isPresented: Binding(get: { variablePendingDelete != nil }, set: { if !$0 { variablePendingDelete = nil } })) {
-            Button("Remove from Vault and .env", role: .destructive) {
+            Button(model.selectedVault?.dotenvFileName == nil ? "Remove from Vault" : "Remove from Vault and .env", role: .destructive) {
                 guard let variable = variablePendingDelete else { return }
                 variablePendingDelete = nil
                 Task { await model.deleteVariable(variable) }
@@ -755,7 +786,7 @@ struct ContentView: View {
                 variablePendingDelete = nil
             }
         } message: {
-            Text("This removes the selected key from Personal Env and from the vault's tracked dotenv file.")
+            Text(model.selectedVault?.dotenvFileName == nil ? "This removes the selected key from Personal Env." : "This removes the selected key from Personal Env and from the vault's tracked dotenv file.")
         }
         .tint(EnvTheme.accent)
         .sheet(isPresented: $showTutorial, onDismiss: { hasSeenWelcomeTutorial = true }) {
@@ -1021,6 +1052,37 @@ struct ContentView: View {
             .map(\.key)
     }
 
+    private var normalizedNewScope: String {
+        let scope = newScope.trimmingCharacters(in: .whitespacesAndNewlines)
+        return scope.isEmpty ? "project" : scope
+    }
+
+    private var pastedDotenvReview: DotenvPasteReview {
+        DotenvCodec.reviewPaste(pastedDotenvText, scope: normalizedNewScope)
+    }
+
+    private var pastedDotenvUpdateCount: Int {
+        guard let vault = model.selectedVault else { return 0 }
+        let existingKeys = Set(vault.variables.map(\.key))
+        return pastedDotenvReview.variables.filter { existingKeys.contains($0.key) }.count
+    }
+
+    private var pastedDotenvSummary: String {
+        let review = pastedDotenvReview
+        let readyCount = review.variables.count
+        let updateCount = pastedDotenvUpdateCount
+        let invalidCount = review.diagnostics.count
+        var parts = [
+            "\(readyCount) \(readyCount == 1 ? "variable" : "variables") ready",
+            "\(updateCount) will update",
+            "\(invalidCount) invalid"
+        ]
+        if review.replacedAssignmentCount > 0 {
+            parts.append("\(review.replacedAssignmentCount) replaced")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private var allVariableSearchResults: [VariableSearchResult] {
         let query = allVariableSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return [] }
@@ -1159,7 +1221,7 @@ struct ContentView: View {
             } label: {
                 Image(systemName: "plus")
             }
-            .help("Add variable")
+            .help("Add variables")
             Button {
                 syncEditor()
                 showEditControls = true
@@ -1364,47 +1426,186 @@ struct ContentView: View {
                 showEditControls = true
                 showInspector = true
             } label: {
-                Label("Edit Vault", systemImage: "slider.horizontal.3")
+                Label("Add Variables", systemImage: "key.fill")
                     .font(.headline)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
+            .help("Add a variable or paste dotenv lines")
             .padding(12)
         }
         .background(EnvTheme.canvas)
     }
 
     private var addVariableBar: some View {
-        HStack(spacing: 8) {
-            TextField("KEY", text: $newKey)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(.body, design: .monospaced))
-            SecureField("value", text: $newValue)
-                .textFieldStyle(.roundedBorder)
-            TextField("scope", text: $newScope)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 120)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Picker("Add mode", selection: $addVariableMode) {
+                    ForEach(AddVariableMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+
+                Spacer()
+
+                Text("Scope")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(EnvTheme.muted)
+                TextField("project", text: $newScope)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(width: 130)
+                Button {
+                    clearAddComposer()
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .disabled(isAddComposerEmpty)
+                Button {
+                    showEditControls = false
+                } label: {
+                    Label("Done", systemImage: "checkmark.circle")
+                }
+            }
+
+            switch addVariableMode {
+            case .single:
+                singleVariableComposer
+            case .paste:
+                pastedDotenvComposer
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(EnvTheme.canvas)
+    }
+
+    private var singleVariableComposer: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            fieldStack(label: "Key") {
+                TextField("OPENAI_API_KEY", text: $newKey)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+            }
+            .frame(maxWidth: .infinity)
+            fieldStack(label: "Value") {
+                SecureField("secret value", text: $newValue)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .frame(maxWidth: .infinity)
             Button {
                 let key = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 let value = newValue
-                let scope = newScope.trimmingCharacters(in: .whitespacesAndNewlines)
+                let scope = normalizedNewScope
                 newKey = ""
                 newValue = ""
-                Task { await model.setVariable(key: key, value: value, scope: scope.isEmpty ? "project" : scope) }
+                Task { await model.setVariable(key: key, value: value, scope: scope) }
             } label: {
                 Label("Save", systemImage: "key.fill")
+                    .frame(minWidth: 86)
             }
-            .disabled(newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button {
-                showEditControls = false
-            } label: {
-                Label("Done", systemImage: "checkmark.circle")
+            .buttonStyle(.borderedProminent)
+            .disabled(newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isWorking)
+        }
+    }
+
+    private var pastedDotenvComposer: some View {
+        let review = pastedDotenvReview
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $pastedDotenvText)
+                        .font(.system(.body, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .frame(minHeight: 86, maxHeight: 86)
+                        .background(EnvTheme.panel, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(EnvTheme.separator.opacity(0.65), lineWidth: 1)
+                        )
+                    if pastedDotenvText.isEmpty {
+                        Text("OPENAI_API_KEY=sk-...\nRESEND_API_KEY=re_...")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(EnvTheme.muted.opacity(0.55))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 14)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                Button {
+                    let variables = review.variables
+                    pastedDotenvText = ""
+                    Task { await model.importPastedDotenv(variables) }
+                } label: {
+                    Label(review.variables.isEmpty ? "Save" : "Save \(review.variables.count)", systemImage: "key.fill")
+                        .frame(minWidth: 88)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canSavePastedDotenv(review))
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: review.diagnostics.isEmpty ? "checkmark.circle" : "exclamationmark.triangle")
+                    .foregroundStyle(review.diagnostics.isEmpty ? EnvTheme.green : EnvTheme.orange)
+                Text(pastedDotenvSummary)
+                    .font(.caption)
+                    .foregroundStyle(EnvTheme.muted)
+                Spacer()
+            }
+
+            if !review.diagnostics.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(review.diagnostics.prefix(3), id: \.lineNumber) { diagnostic in
+                        Text("Line \(diagnostic.lineNumber): \(diagnostic.message)")
+                            .font(.caption)
+                            .foregroundStyle(EnvTheme.orange)
+                            .lineLimit(1)
+                    }
+                    if review.diagnostics.count > 3 {
+                        Text("\(review.diagnostics.count - 3) more invalid lines")
+                            .font(.caption)
+                            .foregroundStyle(EnvTheme.orange)
+                    }
+                }
             }
         }
-        .padding(12)
-        .background(EnvTheme.canvas)
+    }
+
+    private var isAddComposerEmpty: Bool {
+        newKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            newValue.isEmpty &&
+            pastedDotenvText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            normalizedNewScope == "project"
+    }
+
+    private func canSavePastedDotenv(_ review: DotenvPasteReview) -> Bool {
+        !model.isWorking &&
+            !pastedDotenvText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !review.variables.isEmpty &&
+            review.diagnostics.isEmpty
+    }
+
+    private func clearAddComposer() {
+        newKey = ""
+        newValue = ""
+        newScope = "project"
+        pastedDotenvText = ""
+    }
+
+    private func fieldStack<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(EnvTheme.muted)
+            content()
+        }
     }
 
     private var inspector: some View {
@@ -2000,7 +2201,7 @@ struct WelcomeTutorialView: View {
             VStack(alignment: .leading, spacing: 16) {
                 TutorialStep(icon: "folder.badge.plus", title: "Approve folders", text: "Choose any directory you want Personal Env to scan, including Documents or Downloads.")
                 TutorialStep(icon: "doc.text.magnifyingglass", title: "Review scan results", text: "Detected .env variables stay selectable before anything is imported.")
-                TutorialStep(icon: "key.fill", title: "Add shared API keys", text: "Use Edit Vault to reveal the key fields, then save scoped values for services like AI, email, storage, or payments.")
+                TutorialStep(icon: "key.fill", title: "Add shared API keys", text: "Use Add Variables to save one key or paste dotenv lines for services like AI, email, storage, or payments.")
             }
 
             Spacer()

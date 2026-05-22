@@ -54,6 +54,60 @@ public enum DotenvCodec {
             }
     }
 
+    public static func reviewPaste(_ text: String, scope: String = "project") -> DotenvPasteReview {
+        let normalizedScope = scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "project" : scope.trimmingCharacters(in: .whitespacesAndNewlines)
+        var latestAssignments: [String: DotenvPasteAssignment] = [:]
+        var orderedKeys: [String] = []
+        var diagnostics: [DotenvPasteDiagnostic] = []
+        var replacedAssignmentCount = 0
+
+        for (offset, rawLine) in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).enumerated() {
+            let lineNumber = offset + 1
+            var line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            if line.hasPrefix("export ") {
+                line.removeFirst("export ".count)
+                line = line.trimmingCharacters(in: .whitespaces)
+            }
+
+            guard let equals = line.firstIndex(of: "=") else {
+                diagnostics.append(DotenvPasteDiagnostic(lineNumber: lineNumber, line: String(rawLine), message: "Expected KEY=value."))
+                continue
+            }
+
+            let key = String(line[..<equals])
+            do {
+                try DotenvKeyValidator.validate(key)
+            } catch {
+                diagnostics.append(DotenvPasteDiagnostic(lineNumber: lineNumber, line: String(rawLine), message: error.localizedDescription))
+                continue
+            }
+
+            var value = String(line[line.index(after: equals)...]).trimmingCharacters(in: .whitespaces)
+            if value.count >= 2 {
+                let first = value.first
+                let last = value.last
+                if (first == "\"" && last == "\"") || (first == "'" && last == "'") {
+                    value.removeFirst()
+                    value.removeLast()
+                }
+            }
+
+            if latestAssignments[key] != nil {
+                replacedAssignmentCount += 1
+            } else {
+                orderedKeys.append(key)
+            }
+            latestAssignments[key] = DotenvPasteAssignment(
+                lineNumber: lineNumber,
+                variable: EnvVariable(key: key, value: value, scope: normalizedScope)
+            )
+        }
+
+        let assignments = orderedKeys.compactMap { latestAssignments[$0] }
+        return DotenvPasteReview(assignments: assignments, diagnostics: diagnostics, replacedAssignmentCount: replacedAssignmentCount)
+    }
+
     public static func render(_ variables: [EnvVariable]) -> String {
         guard !variables.isEmpty else { return "" }
         return variables
@@ -335,6 +389,59 @@ public enum DotenvCodec {
             lines.append(current)
         }
         return lines
+    }
+}
+
+public enum DotenvKeyValidator {
+    public static func validate(_ key: String) throws {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedKey == key, !key.isEmpty else {
+            throw PersonalEnvError.invalidRequest("Environment variable keys cannot be empty or padded with whitespace.")
+        }
+        let allowedScalars = key.unicodeScalars.allSatisfy { scalar in
+            CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
+        guard allowedScalars, key.unicodeScalars.first.map({ CharacterSet.letters.contains($0) || $0 == "_" }) == true else {
+            throw PersonalEnvError.invalidRequest("Environment variable keys must start with a letter or underscore and contain only letters, numbers, and underscores.")
+        }
+    }
+}
+
+public struct DotenvPasteReview: Equatable, Sendable {
+    public var assignments: [DotenvPasteAssignment]
+    public var diagnostics: [DotenvPasteDiagnostic]
+    public var replacedAssignmentCount: Int
+
+    public var variables: [EnvVariable] {
+        assignments.map(\.variable)
+    }
+
+    public init(assignments: [DotenvPasteAssignment], diagnostics: [DotenvPasteDiagnostic], replacedAssignmentCount: Int) {
+        self.assignments = assignments
+        self.diagnostics = diagnostics
+        self.replacedAssignmentCount = replacedAssignmentCount
+    }
+}
+
+public struct DotenvPasteAssignment: Equatable, Sendable {
+    public var lineNumber: Int
+    public var variable: EnvVariable
+
+    public init(lineNumber: Int, variable: EnvVariable) {
+        self.lineNumber = lineNumber
+        self.variable = variable
+    }
+}
+
+public struct DotenvPasteDiagnostic: Equatable, Sendable {
+    public var lineNumber: Int
+    public var line: String
+    public var message: String
+
+    public init(lineNumber: Int, line: String, message: String) {
+        self.lineNumber = lineNumber
+        self.line = line
+        self.message = message
     }
 }
 

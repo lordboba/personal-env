@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Personal Env"
 EXECUTABLE_NAME="PersonalEnv"
+CLI_EXECUTABLE_NAME="penv"
 BUILD_DIR="$ROOT_DIR/.build/release"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -152,11 +153,14 @@ if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
 else
   swift build -c release --product "$EXECUTABLE_NAME"
 fi
+swift build -c release --product "$CLI_EXECUTABLE_NAME"
 
 rm -rf "$APP_DIR" "$DMG_STAGING_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 cp "$BUILD_DIR/$EXECUTABLE_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
+cp "$BUILD_DIR/$CLI_EXECUTABLE_NAME" "$RESOURCES_DIR/$CLI_EXECUTABLE_NAME"
+chmod +x "$RESOURCES_DIR/$CLI_EXECUTABLE_NAME"
 
 SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build" -path '*/Sparkle.framework' -type d 2>/dev/null | head -n 1 || true)"
 if [[ -n "$SPARKLE_FRAMEWORK" ]]; then

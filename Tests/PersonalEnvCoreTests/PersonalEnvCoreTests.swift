@@ -15,6 +15,48 @@ import Testing
     #expect(DotenvCodec.render(variables).contains("OPENAI_API_KEY=\"sk-test value\""))
 }
 
+@Test func dotenvPasteReviewParsesValidAssignmentsAndIgnoresComments() throws {
+    let review = DotenvCodec.reviewPaste("""
+    # ignored
+    export OPENAI_API_KEY="sk-test value"
+    RESEND_API_KEY=re_test
+    EMPTY=
+    """, scope: "local")
+
+    #expect(review.variables.map(\.key) == ["OPENAI_API_KEY", "RESEND_API_KEY", "EMPTY"])
+    #expect(review.variables.map(\.scope) == ["local", "local", "local"])
+    #expect(review.variables[0].value == "sk-test value")
+    #expect(review.variables[2].value == "")
+    #expect(review.diagnostics.isEmpty)
+}
+
+@Test func dotenvPasteReviewReportsInvalidLines() throws {
+    let review = DotenvCodec.reviewPaste("""
+    VALID_KEY=value
+    NOT AN ASSIGNMENT
+    1_BAD=value
+    PADDED =value
+    """)
+
+    #expect(review.variables.map(\.key) == ["VALID_KEY"])
+    #expect(review.diagnostics.count == 3)
+    #expect(review.diagnostics.map(\.lineNumber) == [2, 3, 4])
+    #expect(review.diagnostics[0].message.contains("KEY=value"))
+}
+
+@Test func dotenvPasteReviewKeepsLastDuplicateAssignment() throws {
+    let review = DotenvCodec.reviewPaste("""
+    API_KEY=first
+    OTHER_KEY=value
+    API_KEY=second
+    """)
+
+    #expect(review.variables.map(\.key) == ["API_KEY", "OTHER_KEY"])
+    #expect(review.variables.first?.value == "second")
+    #expect(review.replacedAssignmentCount == 1)
+    #expect(review.diagnostics.isEmpty)
+}
+
 @Test func dotenvPatchPreservesUnrelatedLinesAndAppendsMissingKeys() throws {
     let patched = DotenvCodec.patch("""
     # keep this
@@ -69,6 +111,44 @@ import Testing
     #expect(variables[0].key == "NEW_KEY")
     #expect(variables[0].value == "new")
     #expect(variables[0].scope == "ai")
+}
+
+@Test func updateVariableRejectsDuplicateKeyRename() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: "/tmp/project")
+    try await service.setVariable(vaultID: vault.id, key: "FIRST_KEY", value: "first", scope: "project")
+    try await service.setVariable(vaultID: vault.id, key: "SECOND_KEY", value: "second", scope: "project")
+    let snapshot = await service.snapshot()
+    let first = try #require(snapshot.vaults.first?.variables.first { $0.key == "FIRST_KEY" })
+
+    do {
+        try await service.updateVariable(vaultID: vault.id, variableID: first.id, key: "SECOND_KEY", value: "updated", scope: "project")
+        Issue.record("Renaming to an existing key should fail.")
+    } catch {
+        #expect(error.localizedDescription.contains("already exists"))
+    }
+
+    let variables = await service.snapshot().vaults[0].variables
+    #expect(variables.map(\.key).sorted() == ["FIRST_KEY", "SECOND_KEY"])
+}
+
+@Test func importVariablesRejectsInvalidKeys() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: "/tmp/project")
+
+    do {
+        try await service.importVariables([
+            EnvVariable(key: "VALID_KEY", value: "value"),
+            EnvVariable(key: "INVALID KEY", value: "value")
+        ], vaultID: vault.id)
+        Issue.record("Invalid imported keys should fail.")
+    } catch {
+        #expect(error.localizedDescription.contains("letters, numbers, and underscores"))
+    }
+
+    #expect(await service.snapshot().vaults[0].variables.isEmpty)
 }
 
 @Test func repeatedImportsGarbageCollectReplacedSecretRecords() async throws {
@@ -280,6 +360,11 @@ import Testing
     #expect(!dotenv.contains("OLD_KEY="))
     #expect(dotenv.contains("NEW_KEY=new\n"))
     #expect(dotenv.contains("KEEP_ME=true\n"))
+    let state = await service.snapshot()
+    #expect(state.projectSecretUses.count == 1)
+    #expect(state.projectSecretUses.first?.key == "NEW_KEY")
+    #expect(state.projectSecretUses.first?.secretID == variable.id)
+    #expect(state.secrets.map(\.id) == [variable.id])
 }
 
 @Test func deleteVariableRemovesTrackedDotenvAssignment() async throws {
@@ -298,6 +383,52 @@ import Testing
     let dotenv = try String(contentsOf: projectURL.appendingPathComponent(".env"), encoding: .utf8)
     #expect(!dotenv.contains("REMOVE_ME="))
     #expect(dotenv == "KEEP_ME=true\n")
+    let state = await service.snapshot()
+    #expect(state.vaults.first?.variables.isEmpty == true)
+    #expect(state.projectSecretUses.isEmpty)
+    #expect(state.secrets.isEmpty)
+}
+
+@Test func renameThenDeleteRemovesStaleInventory() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    try "OLD_KEY=secret\n".write(to: projectURL.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path, dotenvFileName: ".env")
+    try await service.setVariable(vaultID: vault.id, key: "OLD_KEY", value: "secret", scope: "project")
+    let variable = try #require(await service.snapshot().vaults.first?.variables.first)
+
+    try await service.updateVariable(vaultID: vault.id, variableID: variable.id, key: "NEW_KEY", value: "secret", scope: "project")
+    try await service.deleteVariable(vaultID: vault.id, variableID: variable.id)
+
+    let state = await service.snapshot()
+    #expect(state.vaults.first?.variables.isEmpty == true)
+    #expect(state.projectSecretUses.isEmpty)
+    #expect(state.secrets.isEmpty)
+}
+
+@Test func trackedDotenvReadFailureDoesNotCommitVaultMutation() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    let dotenvURL = projectURL.appendingPathComponent(".env")
+    try Data([0xff, 0xfe, 0xfd]).write(to: dotenvURL, options: [.atomic])
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path, dotenvFileName: ".env")
+
+    do {
+        try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "project")
+        Issue.record("Invalid UTF-8 dotenv content should fail instead of being treated as an empty file.")
+    } catch {
+        #expect(!error.localizedDescription.isEmpty)
+    }
+
+    let state = await service.snapshot()
+    #expect(state.vaults.first?.variables.isEmpty == true)
+    #expect(state.projectSecretUses.isEmpty)
+    #expect(state.secrets.isEmpty)
+    #expect(try Data(contentsOf: dotenvURL) == Data([0xff, 0xfe, 0xfd]))
 }
 
 @Test func authorizationGrantExpiresAndWriteImpliesRead() throws {

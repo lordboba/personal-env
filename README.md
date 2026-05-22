@@ -16,6 +16,20 @@ Native macOS SwiftUI app for storing coding environment variables in Apple Keych
 
 ## CLI
 
+For day-to-day use, install the CLI once:
+
+```sh
+bash scripts/install-cli.sh
+penv list
+```
+
+The installer builds the `penv` executable and copies it to `~/.local/bin/penv`
+by default. If `~/.local/bin` is not on your `PATH`, the installer prints the
+exact shell export to add. Use `--prefix /usr/local` or set
+`PENV_INSTALL_PREFIX` to install somewhere else.
+
+During development, you can still run the executable through SwiftPM:
+
 ```sh
 swift run penv vault "Personal Coding" /Users/tylerxiao/Code/project
 swift run penv set <vault-id> OPENAI_API_KEY sk-... ai
