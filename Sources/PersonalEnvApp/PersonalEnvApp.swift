@@ -183,6 +183,8 @@ final class AppModel: ObservableObject {
     private var service: VaultService?
     private var dotenvScanTask: Task<Void, Never>?
     private var activeDotenvScannerTask: Task<[DetectedDotenvFile], Error>?
+    private var sensitiveClipboardClearTask: Task<Void, Never>?
+    private let sensitiveClipboardTTL: Duration = .seconds(90)
 
     var canReload: Bool {
         service != nil && hasUnlockedSecretState && !isWorking
@@ -524,8 +526,7 @@ final class AppModel: ObservableObject {
             isWorking = true
             defer { isWorking = false }
             let text = try await service.exportDotenv(vaultID: vault.id, keys: keys)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            copySensitiveToClipboard(text)
             if let keys, !keys.isEmpty {
                 status = "Copied \(keys.count) selected variables to clipboard"
             } else {
@@ -544,6 +545,35 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         status = "Copied \(label) to clipboard"
+    }
+
+    func copySensitiveToClipboard(_ text: String, label: String? = nil) {
+        sensitiveClipboardClearTask?.cancel()
+        let pasteboard = NSPasteboard.general
+        let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+        let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+        let sourceType = NSPasteboard.PasteboardType("org.nspasteboard.source")
+        pasteboard.clearContents()
+        pasteboard.declareTypes([.string, concealedType, transientType, sourceType], owner: nil)
+        pasteboard.setString(text, forType: .string)
+        pasteboard.setData(Data(), forType: concealedType)
+        pasteboard.setData(Data(), forType: transientType)
+        pasteboard.setString("com.tylerxiao.personal-env", forType: sourceType)
+        if let label {
+            status = "Copied \(label) to clipboard"
+        }
+
+        sensitiveClipboardClearTask = Task { [sensitiveClipboardTTL] in
+            do {
+                try await Task.sleep(for: sensitiveClipboardTTL)
+            } catch {
+                return
+            }
+            await MainActor.run {
+                guard NSPasteboard.general.string(forType: .string) == text else { return }
+                NSPasteboard.general.clearContents()
+            }
+        }
     }
 
     fileprivate func requestSearchFocus(_ field: SearchFocusField) {
@@ -1368,7 +1398,7 @@ struct ContentView: View {
             TableColumn("Value") { variable in
                 Button {
                     model.selectVariable(variable)
-                    model.copyToClipboard(variable.value, label: variable.key)
+                    model.copySensitiveToClipboard(variable.value, label: variable.key)
                     showCopiedFeedback(for: variable.id)
                 } label: {
                     HStack(spacing: 8) {
@@ -1693,7 +1723,7 @@ struct ContentView: View {
                 }
                 Divider()
                 detailRow("Value", value: mask(variable.value), hoverText: "Click to copy value", copiedText: "\(variable.key) copied to clipboard") {
-                    model.copyToClipboard(variable.value, label: variable.key)
+                    model.copySensitiveToClipboard(variable.value, label: variable.key)
                     showDetailCopiedFeedback(for: "Value")
                 }
                 Divider()

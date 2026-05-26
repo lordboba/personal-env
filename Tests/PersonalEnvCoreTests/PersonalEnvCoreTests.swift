@@ -96,6 +96,142 @@ import Testing
     #expect(!exported.contains("RESEND_API_KEY"))
 }
 
+@Test func exportArgumentsRequireExplicitDestination() throws {
+    let vaultID = UUID()
+
+    do {
+        _ = try PEnvExportCommand.parse([vaultID.uuidString])
+        Issue.record("Bare exports should not be allowed to print secrets to stdout.")
+    } catch {
+        #expect(error.localizedDescription.contains("--to-file"))
+    }
+}
+
+@Test func exportArgumentsParseFileDestinationAndKeys() throws {
+    let vaultID = UUID()
+    let command = try PEnvExportCommand.parse([
+        vaultID.uuidString,
+        "--to-file",
+        "/tmp/project/.env",
+        "OPENAI_API_KEY",
+        "RESEND_API_KEY"
+    ])
+
+    #expect(command.vaultID == vaultID)
+    #expect(command.destination == .file("/tmp/project/.env"))
+    #expect(command.keys == ["OPENAI_API_KEY", "RESEND_API_KEY"])
+}
+
+@Test func exportArgumentsRequireExplicitStdoutConfirmation() throws {
+    let vaultID = UUID()
+
+    do {
+        _ = try PEnvExportCommand.parse([vaultID.uuidString, "--stdout", "OPENAI_API_KEY"])
+        Issue.record("Stdout exports should require the explicit secret stdout confirmation flag.")
+    } catch {
+        #expect(error.localizedDescription.contains("--allow-secret-stdout"))
+    }
+
+    let command = try PEnvExportCommand.parse([
+        vaultID.uuidString,
+        "--stdout",
+        "--allow-secret-stdout",
+        "OPENAI_API_KEY"
+    ])
+
+    #expect(command.destination == .stdout)
+    #expect(command.keys == ["OPENAI_API_KEY"])
+}
+
+@Test func exportDotenvToFilePatchesExistingFileAndReturnsRedactedReceipt() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    let dotenvURL = projectURL.appendingPathComponent(".env")
+    try """
+    # keep this
+    OPENAI_API_KEY=old
+    UNMANAGED=value
+    """.write(to: dotenvURL, atomically: true, encoding: .utf8)
+
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path)
+    try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "ai")
+    try await service.setVariable(vaultID: vault.id, key: "RESEND_API_KEY", value: "re-test", scope: "email")
+
+    let receipt = try await service.exportDotenv(vaultID: vault.id, toFile: dotenvURL.path, keys: ["OPENAI_API_KEY"])
+    let text = try String(contentsOf: dotenvURL, encoding: .utf8)
+
+    #expect(text.contains("# keep this\n"))
+    #expect(text.contains("OPENAI_API_KEY=sk-test\n"))
+    #expect(text.contains("UNMANAGED=value"))
+    #expect(!text.contains("RESEND_API_KEY"))
+    #expect(receipt.keys == ["OPENAI_API_KEY"])
+    #expect(receipt.variableCount == 1)
+    #expect(!receipt.description.contains("sk-test"))
+}
+
+@Test func exportDotenvToFileCreatesFileWithOwnerOnlyPermissions() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    let dotenvURL = projectURL.appendingPathComponent(".env")
+
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path)
+    try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "ai")
+
+    _ = try await service.exportDotenv(vaultID: vault.id, toFile: dotenvURL.path)
+
+    let text = try String(contentsOf: dotenvURL, encoding: .utf8)
+    let attributes = try FileManager.default.attributesOfItem(atPath: dotenvURL.path)
+    let permissions = try #require(attributes[.posixPermissions] as? NSNumber)
+    #expect(text == "OPENAI_API_KEY=sk-test\n")
+    #expect(permissions.intValue & 0o077 == 0)
+}
+
+@Test func exportDotenvToFileRejectsUnsafeTargets() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path)
+    try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "ai")
+
+    do {
+        _ = try await service.exportDotenv(vaultID: vault.id, toFile: projectURL.path)
+        Issue.record("Export target should not accept directories.")
+    } catch {
+        #expect(error.localizedDescription.contains("regular file"))
+    }
+
+    do {
+        _ = try await service.exportDotenv(vaultID: vault.id, toFile: projectURL.appendingPathComponent("missing/.env").path)
+        Issue.record("Export target should require an existing parent directory.")
+    } catch {
+        #expect(error.localizedDescription.contains("parent folder"))
+    }
+}
+
+@Test func exportDotenvRejectsMissingRequestedKeys() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    let dotenvURL = projectURL.appendingPathComponent(".env")
+
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path)
+    try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "ai")
+
+    do {
+        _ = try await service.exportDotenv(vaultID: vault.id, toFile: dotenvURL.path, keys: ["MISSING_KEY"])
+        Issue.record("Exporting a requested missing key should fail.")
+    } catch {
+        #expect(error.localizedDescription.contains("MISSING_KEY"))
+    }
+}
+
 @Test func updateVariableRenamesWithoutDuplicating() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
     let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())

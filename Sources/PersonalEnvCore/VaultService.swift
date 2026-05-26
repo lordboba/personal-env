@@ -236,13 +236,57 @@ public actor VaultService {
         guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
-        let variables = filter(vault.variables, keys: keys)
+        let variables = try filter(vault.variables, keys: keys)
         return DotenvCodec.render(variables)
     }
 
-    private func filter(_ variables: [EnvVariable], keys: [String]?) -> [EnvVariable] {
+    public func exportDotenv(vaultID: UUID, toFile path: String, keys: [String]? = nil) async throws -> DotenvFileExportReceipt {
+        try await unlock(reason: "Export environment variables from Apple Keychain to \(path).", capability: .readSecrets)
+        guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
+            throw PersonalEnvError.vaultNotFound
+        }
+        let variables = try filter(vault.variables, keys: keys)
+        try writeDotenvExport(variables, toFile: path)
+        return DotenvFileExportReceipt(
+            vaultID: vault.id,
+            vaultName: vault.name,
+            targetPath: NSString(string: path).expandingTildeInPath,
+            keys: variables.map(\.key).sorted()
+        )
+    }
+
+    private func filter(_ variables: [EnvVariable], keys: [String]?) throws -> [EnvVariable] {
         guard let keys, !keys.isEmpty else { return variables }
-        return variables.filter { keys.contains($0.key) }
+        let variablesByKey = Dictionary(uniqueKeysWithValues: variables.map { ($0.key, $0) })
+        return try keys.map { key in
+            guard let variable = variablesByKey[key] else {
+                throw PersonalEnvError.variableNotFound(key)
+            }
+            return variable
+        }
+    }
+
+    private func writeDotenvExport(_ variables: [EnvVariable], toFile path: String) throws {
+        let expandedPath = NSString(string: path).expandingTildeInPath
+        let url = URL(fileURLWithPath: expandedPath)
+        let parentURL = url.deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: parentURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw PersonalEnvError.invalidRequest("The export target parent folder does not exist.")
+        }
+
+        let fileExists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        if fileExists {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true, !isDirectory.boolValue else {
+                throw PersonalEnvError.invalidRequest("The export target must be a regular file.")
+            }
+        }
+
+        let originalText = fileExists ? try String(contentsOf: url, encoding: .utf8) : ""
+        let patchedText = DotenvCodec.patch(originalText, upserting: variables)
+        try patchedText.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     private func persist() throws {

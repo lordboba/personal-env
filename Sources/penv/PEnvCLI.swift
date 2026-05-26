@@ -64,10 +64,14 @@ struct PEnvCLI {
             try await service.importDetectedDotenvFiles(files)
             print("imported \(files.flatMap(\.variables).count) variables from \(files.count) files")
         case "export":
-            guard let id = args.first else { throw PersonalEnvError.invalidRequest("Usage: penv export <vault-id> [KEY...]") }
-            let vaultID = try parseUUID(id)
-            let keys = Array(args.dropFirst())
-            print(try await service.exportDotenv(vaultID: vaultID, keys: keys.isEmpty ? nil : keys), terminator: "")
+            let command = try PEnvExportCommand.parse(args)
+            switch command.destination {
+            case .file(let path):
+                let receipt = try await service.exportDotenv(vaultID: command.vaultID, toFile: path, keys: command.keys.isEmpty ? nil : command.keys)
+                print(receipt.description)
+            case .stdout:
+                print(try await service.exportDotenv(vaultID: command.vaultID, keys: command.keys.isEmpty ? nil : command.keys), terminator: "")
+            }
         case "list":
             let state = await service.snapshot()
             for vault in state.vaults {
@@ -167,7 +171,8 @@ struct PEnvCLI {
           penv remove <vault-id> <KEY>
           penv import <vault-id> <dotenv-path>
           penv scan <workspace-path>
-          penv export <vault-id> [KEY...]
+          penv export <vault-id> --to-file <path> [KEY...]
+          penv export <vault-id> --stdout --allow-secret-stdout [KEY...]
           penv list
           penv approve <read|write> [--ttl 15m]
           penv approvals

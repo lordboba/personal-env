@@ -12,7 +12,8 @@ Native macOS SwiftUI app for storing coding environment variables in Apple Keych
 
 - Secrets are persisted through Apple Keychain using `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
 - Reads and writes go through `LocalAuthentication` with `.deviceOwnerAuthentication`, allowing Touch ID, passkey/device auth, or passcode fallback depending on hardware.
-- No localhost socket is exposed. Automation should use the explicit CLI export path.
+- No localhost socket is exposed. Automation should use the explicit CLI file export path.
+- Stdout and clipboard exports are human convenience paths. They expose secret material to the receiving process or system pasteboard, so the safe automation path writes directly to a destination `.env` file and prints only a redacted receipt.
 
 ## CLI
 
@@ -35,7 +36,16 @@ swift run penv vault "Personal Coding" /Users/tylerxiao/Code/project
 swift run penv set <vault-id> OPENAI_API_KEY sk-... ai
 swift run penv import <vault-id> .env
 swift run penv scan ~/Documents
-swift run penv export <vault-id> OPENAI_API_KEY
+swift run penv export <vault-id> --to-file .env OPENAI_API_KEY
+```
+
+`penv export` refuses bare stdout output by default. For agent or automation
+workflows, use `--to-file <path>` so `penv` brokers the transfer directly into
+the target `.env` file without printing secret values. Human terminal stdout is
+available only with the explicit escape hatch:
+
+```sh
+swift run penv export <vault-id> --stdout --allow-secret-stdout OPENAI_API_KEY
 ```
 
 ## Build and Test
