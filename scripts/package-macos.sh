@@ -11,6 +11,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
+HELPERS_DIR="$CONTENTS_DIR/Helpers"
 DOWNLOADS_DIR="$ROOT_DIR/download-site/public/downloads"
 DOWNLOAD_DMG="$DOWNLOADS_DIR/Personal-Env-macOS.dmg"
 STALE_DOWNLOAD_ZIP="$DOWNLOADS_DIR/Personal-Env-macOS.zip"
@@ -109,6 +110,10 @@ xml_escape() {
 }
 
 sign_app() {
+  if [[ -n "$SIGN_IDENTITY" && -x "$HELPERS_DIR/$CLI_EXECUTABLE_NAME" ]]; then
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$HELPERS_DIR/$CLI_EXECUTABLE_NAME"
+  fi
+
   if [[ -n "$SIGN_IDENTITY" ]]; then
     codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
   else
@@ -123,11 +128,58 @@ sign_dmg() {
 }
 
 notarize_dmg() {
-  xcrun notarytool submit "$DOWNLOAD_DMG" \
+  local submit_json="$ROOT_DIR/dist/notary-submit.json"
+  local notary_status
+  local submission_id
+
+  mkdir -p "$(dirname "$submit_json")"
+
+  if ! xcrun notarytool submit "$DOWNLOAD_DMG" \
     --apple-id "$APPLE_ID" \
     --team-id "$APPLE_TEAM_ID" \
     --password "$APPLE_APP_PASSWORD" \
-    --wait
+    --wait \
+    --output-format json > "$submit_json"; then
+    echo "Notary submission failed before acceptance." >&2
+    cat "$submit_json" >&2 || true
+    exit 1
+  fi
+
+  notary_status="$(python3 - "$submit_json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+print(payload.get("status", ""))
+PY
+)"
+
+  submission_id="$(python3 - "$submit_json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+print(payload.get("id", ""))
+PY
+)"
+
+  if [[ "$notary_status" != "Accepted" ]]; then
+    echo "Notary submission was not accepted. Status: ${notary_status:-unknown}" >&2
+    cat "$submit_json" >&2 || true
+    if [[ -n "$submission_id" ]]; then
+      echo "Fetching notary log for submission $submission_id..." >&2
+      xcrun notarytool log "$submission_id" \
+        --apple-id "$APPLE_ID" \
+        --team-id "$APPLE_TEAM_ID" \
+        --password "$APPLE_APP_PASSWORD" \
+        "$ROOT_DIR/dist/notary-log.json" >&2 || true
+      cat "$ROOT_DIR/dist/notary-log.json" >&2 || true
+    fi
+    exit 1
+  fi
+
   xcrun stapler staple "$DOWNLOAD_DMG"
 }
 
@@ -156,18 +208,19 @@ fi
 swift build -c release --product "$CLI_EXECUTABLE_NAME"
 
 rm -rf "$APP_DIR" "$DMG_STAGING_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR" "$HELPERS_DIR"
 cp "$BUILD_DIR/$EXECUTABLE_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
-cp "$BUILD_DIR/$CLI_EXECUTABLE_NAME" "$RESOURCES_DIR/$CLI_EXECUTABLE_NAME"
-chmod +x "$RESOURCES_DIR/$CLI_EXECUTABLE_NAME"
+cp "$BUILD_DIR/$CLI_EXECUTABLE_NAME" "$HELPERS_DIR/$CLI_EXECUTABLE_NAME"
+chmod +x "$HELPERS_DIR/$CLI_EXECUTABLE_NAME"
 
-SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build" -path '*/Sparkle.framework' -type d 2>/dev/null | head -n 1 || true)"
-if [[ -n "$SPARKLE_FRAMEWORK" ]]; then
+if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
+  SPARKLE_FRAMEWORK="$(find "$ROOT_DIR/.build" -path '*/Sparkle.framework' -type d 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
+    echo "Sparkle.framework was not found under .build after release build." >&2
+    exit 1
+  fi
   cp -R "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/"
-elif [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
-  echo "Sparkle.framework was not found under .build after release build." >&2
-  exit 1
 fi
 
 rm -rf "$ICONSET_DIR"
