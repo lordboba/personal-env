@@ -135,20 +135,20 @@ public actor VaultService {
     public func importDotenv(_ text: String, vaultID: UUID, scope: String = "project") async throws {
         try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
         let variables = DotenvCodec.parse(text, scope: scope)
-        try validateDotenvKeys(variables)
+        try validateDotenvVariables(variables)
         try importVariablesWithoutUnlock(variables, vaultID: vaultID)
     }
 
     public func importVariables(_ variables: [EnvVariable], vaultID: UUID) async throws {
         try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
-        try validateDotenvKeys(variables)
+        try validateDotenvVariables(variables)
         try importVariablesWithoutUnlock(variables, vaultID: vaultID)
     }
 
     public func importDetectedDotenvFiles(_ files: [DetectedDotenvFile], rootName: String? = nil) async throws {
         try await unlock(reason: "Import environment variables into Apple Keychain.", capability: .writeSecrets)
         for file in files {
-            try validateDotenvKeys(file.variables)
+            try validateDotenvVariables(file.variables)
             let projectName = rootNameForFile(file, fallback: rootName)
             let vault = try upsertVaultWithoutUnlock(name: projectName, projectPath: file.projectPath, dotenvFileName: file.fileName)
             try importVariablesWithoutUnlock(file.variables, vaultID: vault.id, dotenvFileName: file.fileName, source: file.path)
@@ -179,6 +179,7 @@ public actor VaultService {
     public func setVariable(vaultID: UUID, key: String, value: String, scope: String = "project") async throws {
         try await unlock(reason: "Store \(key) in Apple Keychain.", capability: .writeSecrets)
         try DotenvKeyValidator.validate(key)
+        try SecretValueValidator.validate(value: value, key: key)
         guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
@@ -196,6 +197,7 @@ public actor VaultService {
     public func updateVariable(vaultID: UUID, variableID: UUID, key: String, value: String, scope: String = "project") async throws {
         try await unlock(reason: "Update \(key) in Apple Keychain.", capability: .writeSecrets)
         try DotenvKeyValidator.validate(key)
+        try SecretValueValidator.validate(value: value, key: key)
         guard let vaultIndex = state.vaults.firstIndex(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
@@ -237,6 +239,7 @@ public actor VaultService {
             throw PersonalEnvError.vaultNotFound
         }
         let variables = try filter(vault.variables, keys: keys)
+        try validateExportableSecretValues(variables)
         return DotenvCodec.render(variables)
     }
 
@@ -246,6 +249,7 @@ public actor VaultService {
             throw PersonalEnvError.vaultNotFound
         }
         let variables = try filter(vault.variables, keys: keys)
+        try validateExportableSecretValues(variables)
         try writeDotenvExport(variables, toFile: path)
         return DotenvFileExportReceipt(
             vaultID: vault.id,
@@ -415,9 +419,16 @@ public actor VaultService {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func validateDotenvKeys(_ variables: [EnvVariable]) throws {
+    private func validateDotenvVariables(_ variables: [EnvVariable]) throws {
         for variable in variables {
             try DotenvKeyValidator.validate(variable.key)
+            try SecretValueValidator.validate(variable)
+        }
+    }
+
+    private func validateExportableSecretValues(_ variables: [EnvVariable]) throws {
+        for variable in variables {
+            try SecretValueValidator.validate(variable)
         }
     }
 

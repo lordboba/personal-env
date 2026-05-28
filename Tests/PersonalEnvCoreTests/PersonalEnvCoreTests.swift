@@ -287,6 +287,65 @@ import Testing
     #expect(await service.snapshot().vaults[0].variables.isEmpty)
 }
 
+@Test func importVariablesRejectsRedactedSecretPlaceholders() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: "/tmp/project")
+    let redactedResendKey = "re_" + String(repeating: "\u{2022}", count: 8)
+
+    do {
+        try await service.importVariables([
+            EnvVariable(key: "RESEND_API_KEY", value: redactedResendKey)
+        ], vaultID: vault.id)
+        Issue.record("Redacted placeholders should not be accepted as secret values.")
+    } catch {
+        #expect(error.localizedDescription.contains("redacted"))
+    }
+
+    #expect(await service.snapshot().vaults[0].variables.isEmpty)
+}
+
+@Test func setVariableRejectsRedactedSecretPlaceholdersWithoutReplacingExistingValue() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: "/tmp/project")
+    let redactedResendKey = "re_" + String(repeating: "\u{2022}", count: 8)
+    try await service.setVariable(vaultID: vault.id, key: "RESEND_API_KEY", value: "re_real", scope: "email")
+
+    do {
+        try await service.setVariable(vaultID: vault.id, key: "RESEND_API_KEY", value: redactedResendKey, scope: "email")
+        Issue.record("Redacted placeholders should not replace an existing secret value.")
+    } catch {
+        #expect(error.localizedDescription.contains("redacted"))
+    }
+
+    let variable = try #require(await service.snapshot().vaults[0].variables.first)
+    #expect(variable.value == "re_real")
+}
+
+@Test func exportDotenvRejectsStoredRedactedSecretPlaceholders() async throws {
+    let vaultID = UUID()
+    let variableID = UUID()
+    let redactedResendKey = "re_" + String(repeating: "\u{2022}", count: 8)
+    let state = AppState(vaults: [
+        EnvVault(id: vaultID, name: "Test", projectPath: "/tmp/project", variables: [
+            EnvVariable(id: variableID, key: "RESEND_API_KEY", value: redactedResendKey)
+        ])
+    ])
+    let targetURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("env")
+    try "KEEP_ME=true\n".write(to: targetURL, atomically: true, encoding: .utf8)
+    let service = try VaultService(store: CountingStore(state: state), authenticator: NoopAuthenticator())
+
+    do {
+        _ = try await service.exportDotenv(vaultID: vaultID, toFile: targetURL.path, keys: ["RESEND_API_KEY"])
+        Issue.record("Export should fail rather than write a redacted placeholder.")
+    } catch {
+        #expect(error.localizedDescription.contains("redacted"))
+    }
+
+    #expect(try String(contentsOf: targetURL, encoding: .utf8) == "KEEP_ME=true\n")
+}
+
 @Test func repeatedImportsGarbageCollectReplacedSecretRecords() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
     let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())

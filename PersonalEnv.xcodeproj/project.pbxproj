@@ -11,9 +11,11 @@
 		100000000000000000000102 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000202 /* Assets.xcassets */; };
 		100000000000000000000103 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000203 /* AuthService.swift */; };
 		100000000000000000000105 /* DotenvCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000205 /* DotenvCodec.swift */; };
+		100000000000000000000110 /* ExportCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000210 /* ExportCommand.swift */; };
 		100000000000000000000106 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000206 /* KeychainStore.swift */; };
 		100000000000000000000107 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000207 /* Models.swift */; };
 		100000000000000000000108 /* VaultService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000208 /* VaultService.swift */; };
+		100000000000000000000109 /* SecretValueValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000209 /* SecretValueValidator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,9 +24,11 @@
 		100000000000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000000000000000000203 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 		100000000000000000000205 /* DotenvCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DotenvCodec.swift; sourceTree = "<group>"; };
+		100000000000000000000210 /* ExportCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportCommand.swift; sourceTree = "<group>"; };
 		100000000000000000000206 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		100000000000000000000207 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		100000000000000000000208 /* VaultService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultService.swift; sourceTree = "<group>"; };
+		100000000000000000000209 /* SecretValueValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretValueValidator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,8 +81,10 @@
 			children = (
 				100000000000000000000203 /* AuthService.swift */,
 				100000000000000000000205 /* DotenvCodec.swift */,
+				100000000000000000000210 /* ExportCommand.swift */,
 				100000000000000000000206 /* KeychainStore.swift */,
 				100000000000000000000207 /* Models.swift */,
+				100000000000000000000209 /* SecretValueValidator.swift */,
 				100000000000000000000208 /* VaultService.swift */,
 			);
 			path = PersonalEnvCore;
@@ -156,8 +162,10 @@
 				100000000000000000000101 /* PersonalEnvApp.swift in Sources */,
 				100000000000000000000103 /* AuthService.swift in Sources */,
 				100000000000000000000105 /* DotenvCodec.swift in Sources */,
+				100000000000000000000110 /* ExportCommand.swift in Sources */,
 				100000000000000000000106 /* KeychainStore.swift in Sources */,
 				100000000000000000000107 /* Models.swift in Sources */,
+				100000000000000000000109 /* SecretValueValidator.swift in Sources */,
 				100000000000000000000108 /* VaultService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
