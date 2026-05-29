@@ -78,3 +78,8 @@ pnpm-debug.log*
 .idea/
 .vscode/
 .cursor/
+.agents/
+.gstack/
+.playwright-mcp/
+.superpowers/
+standards-plan.html

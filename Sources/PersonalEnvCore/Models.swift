@@ -94,6 +94,42 @@ public struct EnvVault: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+public struct AuditEvent: Identifiable, Codable, Equatable, Sendable {
+    public enum EventType: String, Codable, Equatable, Sendable {
+        case importSecrets = "import"
+        case exportSecrets = "export"
+        case scan
+        case approval
+        case revoke
+        case failedAuth = "failed_auth"
+        case vaultCreated = "vault_created"
+        case vaultRenamed = "vault_renamed"
+        case vaultDeleted = "vault_deleted"
+        case secretUpdated = "secret_updated"
+        case secretDeleted = "secret_deleted"
+    }
+
+    public var id: UUID
+    public var type: EventType
+    public var occurredAt: Date
+    public var summary: String
+    public var details: [String: String]
+
+    public init(
+        id: UUID = UUID(),
+        type: EventType,
+        occurredAt: Date = Date(),
+        summary: String,
+        details: [String: String] = [:]
+    ) {
+        self.id = id
+        self.type = type
+        self.occurredAt = occurredAt
+        self.summary = summary
+        self.details = details
+    }
+}
+
 public struct DetectedDotenvFile: Identifiable, Equatable, Sendable {
     public var id: String { path }
     public var fileName: String
@@ -113,17 +149,25 @@ public struct AppState: Codable, Equatable, Sendable {
     public var vaults: [EnvVault]
     public var secrets: [SecretRecord]
     public var projectSecretUses: [ProjectSecretUse]
+    public var auditEvents: [AuditEvent]
 
-    public init(vaults: [EnvVault] = [], secrets: [SecretRecord] = [], projectSecretUses: [ProjectSecretUse] = []) {
+    public init(
+        vaults: [EnvVault] = [],
+        secrets: [SecretRecord] = [],
+        projectSecretUses: [ProjectSecretUse] = [],
+        auditEvents: [AuditEvent] = []
+    ) {
         self.vaults = vaults
         self.secrets = secrets
         self.projectSecretUses = projectSecretUses
+        self.auditEvents = auditEvents
     }
 
     private enum CodingKeys: String, CodingKey {
         case vaults
         case secrets
         case projectSecretUses
+        case auditEvents
     }
 
     public init(from decoder: Decoder) throws {
@@ -131,6 +175,7 @@ public struct AppState: Codable, Equatable, Sendable {
         vaults = try container.decodeIfPresent([EnvVault].self, forKey: .vaults) ?? []
         secrets = try container.decodeIfPresent([SecretRecord].self, forKey: .secrets) ?? []
         projectSecretUses = try container.decodeIfPresent([ProjectSecretUse].self, forKey: .projectSecretUses) ?? []
+        auditEvents = try container.decodeIfPresent([AuditEvent].self, forKey: .auditEvents) ?? []
     }
 
     public func redactedForMetadata() -> AppState {
@@ -154,7 +199,8 @@ public struct AppState: Codable, Equatable, Sendable {
                 )
             },
             secrets: [],
-            projectSecretUses: projectSecretUses
+            projectSecretUses: projectSecretUses,
+            auditEvents: auditEvents
         )
     }
 }

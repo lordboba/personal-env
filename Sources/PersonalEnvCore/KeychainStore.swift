@@ -17,6 +17,26 @@ public extension SecretStoring {
     func saveMetadata(_ state: AppState) throws {}
 }
 
+public enum KeychainItemProtection {
+    public static func protectedAttributes(data: Data, label: String, description: String) throws -> [String: Any] {
+        guard let accessControl = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            .userPresence,
+            nil
+        ) else {
+            throw PersonalEnvError.keychain("Unable to create Keychain user-presence access control.")
+        }
+
+        return [
+            kSecValueData as String: data,
+            kSecAttrAccessControl as String: accessControl,
+            kSecAttrLabel as String: label,
+            kSecAttrDescription as String: description
+        ]
+    }
+}
+
 public final class KeychainStore: SecretStoring, @unchecked Sendable {
     private let service: String
     private let account: String
@@ -54,12 +74,7 @@ public final class KeychainStore: SecretStoring, @unchecked Sendable {
     public func saveState(_ state: AppState) throws {
         let data = try encoder.encode(state)
         let query = baseQuery(account: account)
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            kSecAttrLabel as String: itemLabel,
-            kSecAttrDescription as String: operationPrompt
-        ]
+        let attributes = try KeychainItemProtection.protectedAttributes(data: data, label: itemLabel, description: operationPrompt)
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if updateStatus == errSecSuccess {

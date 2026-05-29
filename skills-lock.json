@@ -1,11 +1,4 @@
 {
   "version": 1,
-  "skills": {
-    "x-impact-checker": {
-      "source": "tonkotsuboy/x-impact-checker",
-      "sourceType": "github",
-      "skillPath": "skills/x-impact-checker/SKILL.md",
-      "computedHash": "74a7880402923dd0c0dca5676fe1683f092e14f7bd5501cdcbeb3157b769b3f6"
-    }
-  }
+  "skills": {}
 }

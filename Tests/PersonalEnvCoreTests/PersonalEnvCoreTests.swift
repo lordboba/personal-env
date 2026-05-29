@@ -57,6 +57,20 @@ import Testing
     #expect(review.diagnostics.isEmpty)
 }
 
+@Test func dotenvPasteReviewReportsRedactedPlaceholdersAndKeepsValidAssignments() throws {
+    let redactedResendKey = "re_" + String(repeating: "\u{2022}", count: 8)
+    let review = DotenvCodec.reviewPaste("""
+    OPENAI_API_KEY=sk-test
+    RESEND_API_KEY=\(redactedResendKey)
+    GOOGLE_MAPS_API_KEY=gmaps-test
+    """)
+
+    #expect(review.variables.map(\.key) == ["OPENAI_API_KEY", "GOOGLE_MAPS_API_KEY"])
+    #expect(review.diagnostics.count == 1)
+    #expect(review.diagnostics.first?.lineNumber == 2)
+    #expect(review.diagnostics.first?.message.contains("redacted") == true)
+}
+
 @Test func dotenvPatchPreservesUnrelatedLinesAndAppendsMissingKeys() throws {
     let patched = DotenvCodec.patch("""
     # keep this
@@ -141,6 +155,43 @@ import Testing
 
     #expect(command.destination == .stdout)
     #expect(command.keys == ["OPENAI_API_KEY"])
+}
+
+@Test func setArgumentsRejectSecretValuesInPositionals() throws {
+    let vaultID = UUID()
+
+    do {
+        _ = try PEnvSetCommand.parse([vaultID.uuidString, "OPENAI_API_KEY", "sk-test", "ai"])
+        Issue.record("penv set should not accept secret values as positional arguments.")
+    } catch {
+        #expect(error.localizedDescription.contains("--stdin"))
+    }
+}
+
+@Test func setArgumentsParseStdinInputAndScope() throws {
+    let vaultID = UUID()
+    let command = try PEnvSetCommand.parse([
+        vaultID.uuidString,
+        "OPENAI_API_KEY",
+        "--stdin",
+        "--scope",
+        "ai"
+    ])
+
+    #expect(command.vaultID == vaultID)
+    #expect(command.key == "OPENAI_API_KEY")
+    #expect(command.input == .stdin)
+    #expect(command.scope == "ai")
+}
+
+@Test func setArgumentsParseEditorInput() throws {
+    let vaultID = UUID()
+    let command = try PEnvSetCommand.parse([vaultID.uuidString, "RESEND_API_KEY", "--editor"])
+
+    #expect(command.vaultID == vaultID)
+    #expect(command.key == "RESEND_API_KEY")
+    #expect(command.input == .editor)
+    #expect(command.scope == "project")
 }
 
 @Test func exportDotenvToFilePatchesExistingFileAndReturnsRedactedReceipt() async throws {
@@ -344,6 +395,84 @@ import Testing
     }
 
     #expect(try String(contentsOf: targetURL, encoding: .utf8) == "KEEP_ME=true\n")
+}
+
+@Test func scopedApprovalRequiresExactSubjectMatch() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let store = FileAuthorizationGrantStore(url: url)
+    let vaultID = UUID()
+    let now = Date(timeIntervalSince1970: 1_000)
+    let subject = ApprovalSubject(
+        capability: .readSecrets,
+        vaultID: vaultID,
+        keySet: ["OPENAI_API_KEY", "RESEND_API_KEY"],
+        destination: .file("/tmp/project/.env"),
+        requester: "agent:codex",
+        command: "export"
+    )
+
+    _ = try store.approve(ApprovalRequest(subject: subject, ttl: 60), at: now)
+
+    #expect(try store.hasValidGrant(matching: subject, at: now.addingTimeInterval(30)))
+    #expect(!(try store.hasValidGrant(matching: ApprovalSubject(
+        capability: .readSecrets,
+        vaultID: vaultID,
+        keySet: ["OPENAI_API_KEY"],
+        destination: .file("/tmp/project/.env"),
+        requester: "agent:codex",
+        command: "export"
+    ), at: now.addingTimeInterval(30))))
+    #expect(!(try store.hasValidGrant(matching: ApprovalSubject(
+        capability: .readSecrets,
+        vaultID: vaultID,
+        keySet: ["OPENAI_API_KEY", "RESEND_API_KEY"],
+        destination: .file("/tmp/other/.env"),
+        requester: "agent:codex",
+        command: "export"
+    ), at: now.addingTimeInterval(30))))
+}
+
+@Test func auditEventsAreDurableAndRedactedForSecretOperations() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    let dotenvURL = projectURL.appendingPathComponent(".env")
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path)
+
+    try await service.importVariables([
+        EnvVariable(key: "OPENAI_API_KEY", value: "sk-test-secret", scope: "ai")
+    ], vaultID: vault.id)
+    _ = try await service.exportDotenv(vaultID: vault.id, toFile: dotenvURL.path, keys: ["OPENAI_API_KEY"])
+
+    let persisted = try FileStateStore(url: stateURL).loadState()
+    #expect(persisted.auditEvents.map(\.type).contains(.importSecrets))
+    #expect(persisted.auditEvents.map(\.type).contains(.exportSecrets))
+
+    let encoded = String(decoding: try JSONEncoder().encode(persisted.auditEvents), as: UTF8.self)
+    #expect(!encoded.contains("sk-test-secret"))
+    #expect(encoded.contains("OPENAI_API_KEY"))
+}
+
+@Test func auditRecordsFailedAuthenticationWithoutSecretValues() async throws {
+    let state = AppState(vaults: [
+        EnvVault(name: "Test", projectPath: "/tmp/project", variables: [
+            EnvVariable(key: "OPENAI_API_KEY", value: "")
+        ])
+    ])
+    let store = MetadataCapturingStore(state: state)
+    let service = try VaultService(store: store, authenticator: FailingAuthenticator())
+
+    do {
+        try await service.unlock()
+        Issue.record("Unlock should fail.")
+    } catch {
+        #expect(error.localizedDescription.contains("denied"))
+    }
+
+    #expect(store.savedMetadata?.auditEvents.map(\.type) == [.failedAuth])
+    let encoded = String(decoding: try JSONEncoder().encode(store.savedMetadata?.auditEvents ?? []), as: UTF8.self)
+    #expect(!encoded.contains("sk-test"))
 }
 
 @Test func repeatedImportsGarbageCollectReplacedSecretRecords() async throws {
@@ -638,6 +767,17 @@ import Testing
     #expect(!(try store.hasValidGrant(for: .writeSecrets, at: now.addingTimeInterval(61))))
 }
 
+@Test func keychainProtectedAttributesUseUserPresenceAccessControl() throws {
+    let attributes = try KeychainItemProtection.protectedAttributes(
+        data: Data("secret".utf8),
+        label: "Test Label",
+        description: "Test Description"
+    )
+
+    #expect(attributes[kSecAttrAccessControl as String] != nil)
+    #expect(attributes[kSecAttrAccessible as String] == nil)
+}
+
 @Test func vaultServiceLoadsMetadataWithoutSecretValuesUntilUnlock() async throws {
     let state = AppState(vaults: [
         EnvVault(name: "Test", projectPath: "/tmp/project", variables: [
@@ -757,7 +897,36 @@ final class CountingStore: SecretStoring, @unchecked Sendable {
 actor CountingAuthenticator: Authenticating {
     private(set) var unlockCount = 0
 
-    func unlock(reason _: String, capability _: ApprovalCapability) async throws {
+    func unlock(reason _: String, subject _: ApprovalSubject) async throws {
         unlockCount += 1
+    }
+}
+
+final class MetadataCapturingStore: SecretStoring, @unchecked Sendable {
+    private let state: AppState
+    private(set) var savedMetadata: AppState?
+
+    init(state: AppState) {
+        self.state = state
+    }
+
+    func loadState() throws -> AppState {
+        state
+    }
+
+    func saveState(_ state: AppState) throws {}
+
+    func loadMetadata() throws -> AppState {
+        state.redactedForMetadata()
+    }
+
+    func saveMetadata(_ state: AppState) throws {
+        savedMetadata = state.redactedForMetadata()
+    }
+}
+
+struct FailingAuthenticator: Authenticating {
+    func unlock(reason _: String, subject _: ApprovalSubject) async throws {
+        throw PersonalEnvError.authenticationFailed("denied")
     }
 }

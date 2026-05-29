@@ -93,6 +93,13 @@ public enum DotenvCodec {
                 }
             }
 
+            do {
+                try SecretValueValidator.validate(value: value, key: key)
+            } catch {
+                diagnostics.append(DotenvPasteDiagnostic(lineNumber: lineNumber, line: String(rawLine), message: error.localizedDescription))
+                continue
+            }
+
             if latestAssignments[key] != nil {
                 replacedAssignmentCount += 1
             } else {

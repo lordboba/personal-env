@@ -7,13 +7,15 @@ Native macOS SwiftUI app for storing coding environment variables in Apple Keych
 - `PersonalEnvCore`: Keychain persistence, LocalAuthentication unlock, approved-directory `.env` scanning, and `.env` import/export.
 - `PersonalEnvApp`: macOS SwiftUI app with vaults, masked variables, Touch ID/passkey unlock, first-run folder scanning, import/export controls, key copy, and detail-pane editing.
 - `penv`: developer CLI for creating vaults and setting/importing/exporting variables.
+- `docs/standard.md`: public contract for vault metadata, dotenv semantics, scoped approvals, CLI behavior, and agent-mediated transfers.
 
 ## Security Model
 
-- Secrets are persisted through Apple Keychain using `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
+- Secrets are persisted through Apple Keychain using a device-local user-presence access-control policy.
 - Reads and writes go through `LocalAuthentication` with `.deviceOwnerAuthentication`, allowing Touch ID, passkey/device auth, or passcode fallback depending on hardware.
 - No localhost socket is exposed. Automation should use the explicit CLI file export path.
 - Stdout and clipboard exports are human convenience paths. They expose secret material to the receiving process or system pasteboard, so the safe automation path writes directly to a destination `.env` file and prints only a redacted receipt.
+- Approval grants can be scoped by vault, key set, destination, requester, command, and TTL. Agent transfers require the exact approved subject.
 
 ## CLI
 
@@ -33,7 +35,9 @@ During development, you can still run the executable through SwiftPM:
 
 ```sh
 swift run penv vault "Personal Coding" /Users/tylerxiao/Code/project
-swift run penv set <vault-id> OPENAI_API_KEY sk-... ai
+printf '%s' "$OPENAI_API_KEY" | swift run penv set <vault-id> OPENAI_API_KEY --stdin --scope ai
+swift run penv set <vault-id> RESEND_API_KEY --prompt --scope email
+swift run penv set <vault-id> STRIPE_SECRET_KEY --editor --scope payments
 swift run penv import <vault-id> .env
 swift run penv scan ~/Documents
 swift run penv export <vault-id> --to-file .env OPENAI_API_KEY
@@ -46,6 +50,13 @@ available only with the explicit escape hatch:
 
 ```sh
 swift run penv export <vault-id> --stdout --allow-secret-stdout OPENAI_API_KEY
+```
+
+Scoped approvals are available for agent-mediated transfers:
+
+```sh
+swift run penv approve read --ttl 10m --vault <vault-id> --keys OPENAI_API_KEY --to-file .env --requester agent:codex --command export
+swift run penv export <vault-id> --to-file .env --requester agent:codex OPENAI_API_KEY
 ```
 
 ## Build and Test

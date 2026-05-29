@@ -19,9 +19,18 @@ public actor VaultService {
         state
     }
 
+    public func recordAuditEvent(_ event: AuditEvent) throws {
+        try persistAuditEvent(event)
+    }
+
     public func reload(reason: String = "Reload Personal Env from Apple Keychain.") async throws {
         if !hasLoadedSecretState {
-            try await authenticator.unlock(reason: reason, capability: .readSecrets)
+            do {
+                try await authenticator.unlock(reason: reason, capability: .readSecrets)
+            } catch {
+                recordFailedAuthentication(reason: reason, error: error)
+                throw error
+            }
         }
         try reloadSecretState()
     }
@@ -52,7 +61,16 @@ public actor VaultService {
     }
 
     public func unlock(reason: String = "Unlock Personal Env to access your Keychain-backed environment variables.", capability: ApprovalCapability = .readSecrets) async throws {
-        try await authenticator.unlock(reason: reason, capability: capability)
+        try await unlock(reason: reason, subject: ApprovalSubject(capability: capability))
+    }
+
+    public func unlock(reason: String, subject: ApprovalSubject) async throws {
+        do {
+            try await authenticator.unlock(reason: reason, subject: subject)
+        } catch {
+            recordFailedAuthentication(reason: reason, error: error)
+            throw error
+        }
         try loadSecretStateIfNeeded()
     }
 
@@ -153,6 +171,14 @@ public actor VaultService {
             let vault = try upsertVaultWithoutUnlock(name: projectName, projectPath: file.projectPath, dotenvFileName: file.fileName)
             try importVariablesWithoutUnlock(file.variables, vaultID: vault.id, dotenvFileName: file.fileName, source: file.path)
         }
+        try persistAuditEvent(AuditEvent(
+            type: .scan,
+            summary: "Imported scan results from \(files.count) dotenv files",
+            details: [
+                "fileCount": String(files.count),
+                "keyCount": String(files.flatMap(\.variables).count)
+            ]
+        ))
     }
 
     private func importVariablesWithoutUnlock(_ variables: [EnvVariable], vaultID: UUID) throws {
@@ -173,7 +199,12 @@ public actor VaultService {
             }
         }
         state.vaults[index].updatedAt = Date()
-        try commitStateWithDotenvPatch(vaultIndex: index, upserting: variables, previousState: previousState)
+        let auditEvent = AuditEvent(
+            type: .importSecrets,
+            summary: "Imported \(variables.count) variables into \(state.vaults[index].name)",
+            details: secretAuditDetails(vault: state.vaults[index], keys: variables.map(\.key), source: source)
+        )
+        try commitStateWithDotenvPatch(vaultIndex: index, upserting: variables, previousState: previousState, auditEvent: auditEvent)
     }
 
     public func setVariable(vaultID: UUID, key: String, value: String, scope: String = "project") async throws {
@@ -191,7 +222,12 @@ public actor VaultService {
             state.vaults[vaultIndex].variables.append(variable)
         }
         state.vaults[vaultIndex].updatedAt = Date()
-        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, upserting: [variable], previousState: previousState)
+        let auditEvent = AuditEvent(
+            type: .secretUpdated,
+            summary: "Stored \(key) in \(state.vaults[vaultIndex].name)",
+            details: secretAuditDetails(vault: state.vaults[vaultIndex], keys: [key], source: "manual")
+        )
+        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, upserting: [variable], previousState: previousState, auditEvent: auditEvent)
     }
 
     public func updateVariable(vaultID: UUID, variableID: UUID, key: String, value: String, scope: String = "project") async throws {
@@ -215,7 +251,12 @@ public actor VaultService {
             removeTrackedUses(vaultIndex: vaultIndex, keys: [oldKey])
         }
         state.vaults[vaultIndex].updatedAt = Date()
-        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, upserting: [variable], removingKeys: oldKey == key ? [] : [oldKey], previousState: previousState)
+        let auditEvent = AuditEvent(
+            type: .secretUpdated,
+            summary: "Updated \(key) in \(state.vaults[vaultIndex].name)",
+            details: secretAuditDetails(vault: state.vaults[vaultIndex], keys: [key], source: "manual")
+        )
+        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, upserting: [variable], removingKeys: oldKey == key ? [] : [oldKey], previousState: previousState, auditEvent: auditEvent)
     }
 
     public func deleteVariable(vaultID: UUID, variableID: UUID) async throws {
@@ -230,31 +271,69 @@ public actor VaultService {
         let variable = state.vaults[vaultIndex].variables.remove(at: variableIndex)
         removeTrackedUses(vaultIndex: vaultIndex, keys: [variable.key])
         state.vaults[vaultIndex].updatedAt = Date()
-        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, removingKeys: [variable.key], previousState: previousState)
+        let auditEvent = AuditEvent(
+            type: .secretDeleted,
+            summary: "Removed \(variable.key) from \(state.vaults[vaultIndex].name)",
+            details: secretAuditDetails(vault: state.vaults[vaultIndex], keys: [variable.key], source: nil)
+        )
+        try commitStateWithDotenvPatch(vaultIndex: vaultIndex, removingKeys: [variable.key], previousState: previousState, auditEvent: auditEvent)
     }
 
-    public func exportDotenv(vaultID: UUID, keys: [String]? = nil) async throws -> String {
-        try await unlock(reason: "Export environment variables from Apple Keychain.", capability: .readSecrets)
+    public func exportDotenv(vaultID: UUID, keys: [String]? = nil, destination: ApprovalDestination = .clipboard, requester: String? = nil) async throws -> String {
+        let requestedKeys = try requestedKeySet(vaultID: vaultID, keys: keys)
+        try await unlock(
+            reason: "Export environment variables from Apple Keychain.",
+            subject: ApprovalSubject(
+                capability: .readSecrets,
+                vaultID: vaultID,
+                keySet: requestedKeys,
+                destination: destination,
+                requester: requester,
+                command: "export"
+            )
+        )
         guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
         let variables = try filter(vault.variables, keys: keys)
         try validateExportableSecretValues(variables)
+        try persistAuditEvent(AuditEvent(
+            type: .exportSecrets,
+            summary: "Exported \(variables.count) variables from \(vault.name)",
+            details: secretAuditDetails(vault: vault, keys: variables.map(\.key), source: destination.auditDescription)
+        ))
         return DotenvCodec.render(variables)
     }
 
-    public func exportDotenv(vaultID: UUID, toFile path: String, keys: [String]? = nil) async throws -> DotenvFileExportReceipt {
-        try await unlock(reason: "Export environment variables from Apple Keychain to \(path).", capability: .readSecrets)
+    public func exportDotenv(vaultID: UUID, toFile path: String, keys: [String]? = nil, requester: String? = nil) async throws -> DotenvFileExportReceipt {
+        let expandedPath = NSString(string: path).expandingTildeInPath
+        let requestedKeys = try requestedKeySet(vaultID: vaultID, keys: keys)
+        try await unlock(
+            reason: "Export environment variables from Apple Keychain to \(expandedPath).",
+            subject: ApprovalSubject(
+                capability: .readSecrets,
+                vaultID: vaultID,
+                keySet: requestedKeys,
+                destination: .file(expandedPath),
+                requester: requester,
+                command: "export"
+            )
+        )
         guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
         }
         let variables = try filter(vault.variables, keys: keys)
         try validateExportableSecretValues(variables)
-        try writeDotenvExport(variables, toFile: path)
+        try writeDotenvExport(variables, toFile: expandedPath)
+        try persistAuditEvent(AuditEvent(
+            type: .exportSecrets,
+            summary: "Exported \(variables.count) variables from \(vault.name) to file",
+            details: secretAuditDetails(vault: vault, keys: variables.map(\.key), source: expandedPath)
+        ))
         return DotenvFileExportReceipt(
             vaultID: vault.id,
             vaultName: vault.name,
-            targetPath: NSString(string: path).expandingTildeInPath,
+            targetPath: expandedPath,
             keys: variables.map(\.key).sorted()
         )
     }
@@ -268,6 +347,16 @@ public actor VaultService {
             }
             return variable
         }
+    }
+
+    private func requestedKeySet(vaultID: UUID, keys: [String]?) throws -> [String]? {
+        guard let keys, !keys.isEmpty else {
+            guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
+                throw PersonalEnvError.vaultNotFound
+            }
+            return vault.variables.map(\.key).sorted()
+        }
+        return Array(Set(keys)).sorted()
     }
 
     private func writeDotenvExport(_ variables: [EnvVariable], toFile path: String) throws {
@@ -296,6 +385,41 @@ public actor VaultService {
     private func persist() throws {
         garbageCollectUnreferencedSecrets()
         try store.saveState(state)
+    }
+
+    private func persistAuditEvent(_ event: AuditEvent) throws {
+        state.auditEvents.append(event)
+        if hasLoadedSecretState {
+            try persist()
+        } else {
+            try store.saveMetadata(state)
+        }
+    }
+
+    private func recordFailedAuthentication(reason: String, error: Error) {
+        let event = AuditEvent(
+            type: .failedAuth,
+            summary: "Authentication failed",
+            details: [
+                "reason": reason,
+                "error": error.localizedDescription
+            ]
+        )
+        try? persistAuditEvent(event)
+    }
+
+    private func secretAuditDetails(vault: EnvVault, keys: [String], source: String?) -> [String: String] {
+        var details: [String: String] = [
+            "vaultID": vault.id.uuidString,
+            "vaultName": vault.name,
+            "projectPath": vault.projectPath,
+            "keys": Array(Set(keys)).sorted().joined(separator: ", "),
+            "keyCount": String(keys.count)
+        ]
+        if let source, !source.isEmpty {
+            details["source"] = source
+        }
+        return details
     }
 
     private func garbageCollectUnreferencedSecrets() {
@@ -327,8 +451,10 @@ public actor VaultService {
     }
 
     private func reloadSecretState() throws {
+        let metadataAuditEvents = state.auditEvents
         var loadedState = try store.loadState()
         Self.hydrateLegacyInventoryIfNeeded(&loadedState)
+        loadedState.auditEvents = Self.mergedAuditEvents(metadataAuditEvents, loadedState.auditEvents)
         state = loadedState
         hasLoadedSecretState = true
         try store.saveMetadata(loadedState)
@@ -374,6 +500,14 @@ public actor VaultService {
                 ))
             }
         }
+    }
+
+    private static func mergedAuditEvents(_ lhs: [AuditEvent], _ rhs: [AuditEvent]) -> [AuditEvent] {
+        var eventsByID: [UUID: AuditEvent] = [:]
+        for event in lhs + rhs {
+            eventsByID[event.id] = event
+        }
+        return eventsByID.values.sorted { $0.occurredAt < $1.occurredAt }
     }
 
     private func variableWithTrackedSecret(_ variable: EnvVariable, vaultIndex: Int, dotenvFileName: String?, source: String?) -> EnvVariable {
@@ -436,13 +570,17 @@ public actor VaultService {
         vaultIndex: Int,
         upserting variables: [EnvVariable] = [],
         removingKeys: Set<String> = [],
-        previousState: AppState
+        previousState: AppState,
+        auditEvent: AuditEvent? = nil
     ) throws {
         var appliedPatch: DotenvFilePatch?
         do {
             let patch = try makeDotenvFilePatch(vaultIndex: vaultIndex, upserting: variables, removingKeys: removingKeys)
             try patch?.apply()
             appliedPatch = patch
+            if let auditEvent {
+                state.auditEvents.append(auditEvent)
+            }
             try persist()
         } catch {
             state = previousState
@@ -482,6 +620,21 @@ private struct DotenvFilePatch {
             try originalText.write(to: url, atomically: true, encoding: .utf8)
         } else if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
+        }
+    }
+}
+
+private extension ApprovalDestination {
+    var auditDescription: String {
+        switch self {
+        case .file(let path):
+            return path
+        case .stdout:
+            return "stdout"
+        case .clipboard:
+            return "clipboard"
+        case .app:
+            return "app"
         }
     }
 }
