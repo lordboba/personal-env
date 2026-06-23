@@ -9,6 +9,9 @@ public enum SecretValueValidator {
     }
 
     public static func validate(value: String, key: String) throws {
+        guard !value.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+            throw PersonalEnvError.invalidRequest("\(key) cannot contain line breaks because dotenv exports must preserve one assignment per approved key.")
+        }
         guard !containsRedactedPlaceholder(value) else {
             throw PersonalEnvError.invalidRequest("\(key) looks like a redacted placeholder. Paste the unmasked secret value instead.")
         }

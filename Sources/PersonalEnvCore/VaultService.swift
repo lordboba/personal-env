@@ -101,8 +101,14 @@ public actor VaultService {
         }
 
         let expandedParent = NSString(string: parentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
-        let parentURL = URL(fileURLWithPath: expandedParent, isDirectory: true)
+        let parentURL = URL(fileURLWithPath: try SecurePath.canonicalDirectoryPath(expandedParent), isDirectory: true)
+        guard trimmedName == URL(fileURLWithPath: trimmedName).lastPathComponent, trimmedName != "." && trimmedName != ".." else {
+            throw PersonalEnvError.invalidRequest("Project name must be a single folder name without path separators.")
+        }
         let projectURL = parentURL.appendingPathComponent(trimmedName, isDirectory: true)
+        guard projectURL.standardizedFileURL.deletingLastPathComponent().path == parentURL.path else {
+            throw PersonalEnvError.invalidRequest("Project path must stay inside the selected parent folder.")
+        }
 
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: projectURL.path, isDirectory: &isDirectory) {
@@ -283,14 +289,14 @@ public actor VaultService {
         let requestedKeys = try requestedKeySet(vaultID: vaultID, keys: keys)
         try await unlock(
             reason: "Export environment variables from Apple Keychain.",
-            subject: ApprovalSubject(
+            subject: ApprovalSubject(request: ApprovalSubjectRequest(
                 capability: .readSecrets,
                 vaultID: vaultID,
                 keySet: requestedKeys,
                 destination: destination,
                 requester: requester,
                 command: "export"
-            )
+            ))
         )
         guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
@@ -306,18 +312,18 @@ public actor VaultService {
     }
 
     public func exportDotenv(vaultID: UUID, toFile path: String, keys: [String]? = nil, requester: String? = nil) async throws -> DotenvFileExportReceipt {
-        let expandedPath = NSString(string: path).expandingTildeInPath
+        let expandedPath = try SecurePath.canonicalFilePath(path)
         let requestedKeys = try requestedKeySet(vaultID: vaultID, keys: keys)
         try await unlock(
             reason: "Export environment variables from Apple Keychain to \(expandedPath).",
-            subject: ApprovalSubject(
+            subject: ApprovalSubject(request: ApprovalSubjectRequest(
                 capability: .readSecrets,
                 vaultID: vaultID,
                 keySet: requestedKeys,
                 destination: .file(expandedPath),
                 requester: requester,
                 command: "export"
-            )
+            ))
         )
         guard let vault = state.vaults.first(where: { $0.id == vaultID }) else {
             throw PersonalEnvError.vaultNotFound
@@ -360,7 +366,7 @@ public actor VaultService {
     }
 
     private func writeDotenvExport(_ variables: [EnvVariable], toFile path: String) throws {
-        let expandedPath = NSString(string: path).expandingTildeInPath
+        let expandedPath = try SecurePath.canonicalFilePath(path)
         let url = URL(fileURLWithPath: expandedPath)
         let parentURL = url.deletingLastPathComponent()
         var isDirectory: ObjCBool = false
@@ -369,16 +375,11 @@ public actor VaultService {
         }
 
         let fileExists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-        if fileExists {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isRegularFile == true, values.isSymbolicLink != true, !isDirectory.boolValue else {
-                throw PersonalEnvError.invalidRequest("The export target must be a regular file.")
-            }
-        }
+        try SecurePath.validateExistingRegularFileTarget(at: url.path, description: "The export target")
 
         let originalText = fileExists ? try String(contentsOf: url, encoding: .utf8) : ""
         let patchedText = DotenvCodec.patch(originalText, upserting: variables)
-        try patchedText.write(to: url, atomically: true, encoding: .utf8)
+        try writeAtomicallyReplacingFile(text: patchedText, to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
@@ -595,14 +596,32 @@ public actor VaultService {
         let vault = state.vaults[vaultIndex]
         guard let dotenvFileName = vault.dotenvFileName else { return nil }
 
-        let directoryURL = URL(fileURLWithPath: NSString(string: vault.projectPath).expandingTildeInPath, isDirectory: true)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let directoryURL = URL(fileURLWithPath: try SecurePath.canonicalDirectoryPath(vault.projectPath), isDirectory: true)
         let dotenvURL = directoryURL.appendingPathComponent(dotenvFileName)
-        let originalText = FileManager.default.fileExists(atPath: dotenvURL.path)
-            ? try String(contentsOf: dotenvURL, encoding: .utf8)
+        let canonicalDotenvPath = try SecurePath.canonicalFilePath(dotenvURL.path)
+        guard URL(fileURLWithPath: canonicalDotenvPath).deletingLastPathComponent().path == directoryURL.path else {
+            throw PersonalEnvError.invalidRequest("Tracked dotenv file must stay inside the vault project folder.")
+        }
+        let canonicalDotenvURL = URL(fileURLWithPath: canonicalDotenvPath)
+        try SecurePath.validateExistingRegularFileTarget(at: canonicalDotenvURL.path, description: "Tracked dotenv file")
+        let originalText = FileManager.default.fileExists(atPath: canonicalDotenvURL.path)
+            ? try String(contentsOf: canonicalDotenvURL, encoding: .utf8)
             : nil
         let patchedText = DotenvCodec.patch(originalText ?? "", upserting: variables, removingKeys: removingKeys)
-        return DotenvFilePatch(url: dotenvURL, originalText: originalText, patchedText: patchedText)
+        return DotenvFilePatch(url: canonicalDotenvURL, originalText: originalText, patchedText: patchedText)
+    }
+}
+
+private func writeAtomicallyReplacingFile(text: String, to url: URL) throws {
+    let parentURL = url.deletingLastPathComponent()
+    let temporaryURL = parentURL.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+    try text.write(to: temporaryURL, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporaryURL.path)
+    do {
+        _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL, backupItemName: nil, options: [])
+    } catch {
+        try? FileManager.default.removeItem(at: temporaryURL)
+        throw error
     }
 }
 
@@ -612,12 +631,12 @@ private struct DotenvFilePatch {
     var patchedText: String
 
     func apply() throws {
-        try patchedText.write(to: url, atomically: true, encoding: .utf8)
+        try writeAtomicallyReplacingFile(text: patchedText, to: url)
     }
 
     func restoreOriginal() throws {
         if let originalText {
-            try originalText.write(to: url, atomically: true, encoding: .utf8)
+            try writeAtomicallyReplacingFile(text: originalText, to: url)
         } else if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }

@@ -54,7 +54,93 @@ public enum ApprovalDestination: Codable, Equatable, Sendable {
     }
 }
 
-public struct ApprovalSubject: Codable, Equatable, Sendable {
+public enum SecurePath {
+    public static func canonicalFilePath(_ path: String) throws -> String {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            throw PersonalEnvError.invalidRequest("File path is required.")
+        }
+        let expandedPath = NSString(string: trimmedPath).expandingTildeInPath
+        let inputURL = URL(fileURLWithPath: expandedPath)
+        guard inputURL.isFileURL else {
+            throw PersonalEnvError.invalidRequest("Only local file paths are supported.")
+        }
+
+        let absoluteURL = inputURL.absoluteURL
+        let parentURL = absoluteURL.deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: parentURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw PersonalEnvError.invalidRequest("The file target parent folder does not exist.")
+        }
+
+        let parentValues = try parentURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard parentValues.isDirectory == true, parentValues.isSymbolicLink != true else {
+            throw PersonalEnvError.invalidRequest("The file target parent folder must be a real directory.")
+        }
+
+        let canonicalParent = parentURL.resolvingSymlinksInPath().standardizedFileURL
+        return canonicalParent.appendingPathComponent(absoluteURL.lastPathComponent, isDirectory: false).path
+    }
+
+    public static func validateExistingRegularFileTarget(at path: String, description: String) throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+            return
+        }
+
+        let values = try URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true, !isDirectory.boolValue else {
+            throw PersonalEnvError.invalidRequest("\(description) must be a regular file.")
+        }
+    }
+
+    public static func canonicalDirectoryPath(_ path: String) throws -> String {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            throw PersonalEnvError.invalidRequest("Directory path is required.")
+        }
+        let expandedPath = NSString(string: trimmedPath).expandingTildeInPath
+        let url = URL(fileURLWithPath: expandedPath, isDirectory: true).absoluteURL
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw PersonalEnvError.invalidRequest("The directory must be a real directory.")
+        }
+        return url.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+}
+
+public struct RequesterIdentity: Codable, Equatable, Sendable, CustomStringConvertible {
+    public var value: String
+
+    public var description: String {
+        value
+    }
+
+    public init(value: String) {
+        self.value = value
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        value = try container.decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(value)
+    }
+
+    public static func bind(_ requester: String?) -> RequesterIdentity? {
+        guard let requester = requester?.trimmingCharacters(in: .whitespacesAndNewlines), !requester.isEmpty else {
+            return nil
+        }
+        let executablePath = CommandLine.arguments.first ?? ProcessInfo.processInfo.processName
+        let canonicalExecutable = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().standardizedFileURL.path
+        return RequesterIdentity(value: "\(requester)@\(canonicalExecutable)")
+    }
+}
+
+public struct ApprovalSubjectRequest: Equatable, Sendable {
     public var capability: ApprovalCapability
     public var vaultID: UUID?
     public var keySet: [String]?
@@ -72,10 +158,46 @@ public struct ApprovalSubject: Codable, Equatable, Sendable {
     ) {
         self.capability = capability
         self.vaultID = vaultID
+        self.keySet = keySet
+        self.destination = destination
+        self.requester = requester
+        self.command = command
+    }
+}
+
+public struct ApprovalSubject: Codable, Equatable, Sendable {
+    public var capability: ApprovalCapability
+    public var vaultID: UUID?
+    public var keySet: [String]?
+    public var destination: ApprovalDestination?
+    public var requester: RequesterIdentity?
+    public var command: String?
+
+    public init(
+        capability: ApprovalCapability,
+        vaultID: UUID? = nil,
+        keySet: [String]? = nil,
+        destination: ApprovalDestination? = nil,
+        requester: RequesterIdentity? = nil,
+        command: String? = nil
+    ) {
+        self.capability = capability
+        self.vaultID = vaultID
         self.keySet = keySet.map { Array(Set($0)).sorted() }
         self.destination = destination
-        self.requester = requester?.nilIfBlank
+        self.requester = requester
         self.command = command?.nilIfBlank
+    }
+
+    public init(request: ApprovalSubjectRequest) {
+        self.init(
+            capability: request.capability,
+            vaultID: request.vaultID,
+            keySet: request.keySet,
+            destination: request.destination,
+            requester: RequesterIdentity.bind(request.requester),
+            command: request.command
+        )
     }
 
     public var isScoped: Bool {
@@ -83,15 +205,7 @@ public struct ApprovalSubject: Codable, Equatable, Sendable {
     }
 
     fileprivate func authorizes(_ requested: ApprovalSubject) -> Bool {
-        if self == requested {
-            return true
-        }
-        guard requested.capability == .readSecrets, capability == .writeSecrets else {
-            return false
-        }
-        var writeEquivalent = self
-        writeEquivalent.capability = .readSecrets
-        return writeEquivalent == requested
+        self == requested
     }
 }
 
@@ -116,7 +230,7 @@ public struct AuthorizationGrant: Identifiable, Codable, Equatable, Sendable {
             subject.vaultID?.uuidString ?? "*",
             subject.keySet?.joined(separator: ",") ?? "*",
             subject.destination?.identityText ?? "*",
-            subject.requester ?? "*",
+            subject.requester?.value ?? "*",
             subject.command ?? "*",
             String(expiresAt.timeIntervalSince1970)
         ].joined(separator: "::")

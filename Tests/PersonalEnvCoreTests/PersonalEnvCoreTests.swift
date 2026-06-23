@@ -15,6 +15,15 @@ import Testing
     #expect(DotenvCodec.render(variables).contains("OPENAI_API_KEY=\"sk-test value\""))
 }
 
+@Test func secretValuesRejectLineBreaksThatWouldCreateExtraDotenvAssignments() throws {
+    do {
+        try SecretValueValidator.validate(value: "allowed\nINJECTED=value", key: "OPENAI_API_KEY")
+        Issue.record("Secret values with newlines should not be accepted for dotenv storage.")
+    } catch {
+        #expect(error.localizedDescription.contains("line breaks"))
+    }
+}
+
 @Test func dotenvPasteReviewParsesValidAssignmentsAndIgnoresComments() throws {
     let review = DotenvCodec.reviewPaste("""
     # ignored
@@ -263,6 +272,23 @@ import Testing
     } catch {
         #expect(error.localizedDescription.contains("parent folder"))
     }
+
+    let outsideURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: outsideURL, withIntermediateDirectories: true)
+    let outsideDotenv = outsideURL.appendingPathComponent(".env")
+    let symlinkURL = projectURL.appendingPathComponent("linked.env")
+    try "OUTSIDE_KEY=keep\n".write(to: outsideDotenv, atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: outsideDotenv)
+
+    do {
+        _ = try await service.exportDotenv(vaultID: vault.id, toFile: symlinkURL.path)
+        Issue.record("Export target should reject symlinks.")
+    } catch {
+        #expect(error.localizedDescription.contains("regular file"))
+    }
+
+    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: symlinkURL.path) == outsideDotenv.path)
+    #expect(try String(contentsOf: outsideDotenv, encoding: .utf8) == "OUTSIDE_KEY=keep\n")
 }
 
 @Test func exportDotenvRejectsMissingRequestedKeys() async throws {
@@ -402,34 +428,78 @@ import Testing
     let store = FileAuthorizationGrantStore(url: url)
     let vaultID = UUID()
     let now = Date(timeIntervalSince1970: 1_000)
-    let subject = ApprovalSubject(
+    let subject = ApprovalSubject(request: ApprovalSubjectRequest(
         capability: .readSecrets,
         vaultID: vaultID,
         keySet: ["OPENAI_API_KEY", "RESEND_API_KEY"],
         destination: .file("/tmp/project/.env"),
         requester: "agent:codex",
         command: "export"
-    )
+    ))
 
     _ = try store.approve(ApprovalRequest(subject: subject, ttl: 60), at: now)
 
     #expect(try store.hasValidGrant(matching: subject, at: now.addingTimeInterval(30)))
-    #expect(!(try store.hasValidGrant(matching: ApprovalSubject(
+    #expect(!(try store.hasValidGrant(matching: ApprovalSubject(request: ApprovalSubjectRequest(
         capability: .readSecrets,
         vaultID: vaultID,
         keySet: ["OPENAI_API_KEY"],
         destination: .file("/tmp/project/.env"),
         requester: "agent:codex",
         command: "export"
-    ), at: now.addingTimeInterval(30))))
-    #expect(!(try store.hasValidGrant(matching: ApprovalSubject(
+    )), at: now.addingTimeInterval(30))))
+    #expect(!(try store.hasValidGrant(matching: ApprovalSubject(request: ApprovalSubjectRequest(
         capability: .readSecrets,
         vaultID: vaultID,
         keySet: ["OPENAI_API_KEY", "RESEND_API_KEY"],
         destination: .file("/tmp/other/.env"),
         requester: "agent:codex",
         command: "export"
-    ), at: now.addingTimeInterval(30))))
+    )), at: now.addingTimeInterval(30))))
+}
+
+@Test func scopedRequesterApprovalAuthorizesMatchingVaultServiceExport() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let grantsURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let targetURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("env")
+    let now = Date(timeIntervalSince1970: 1_000)
+    let grantStore = FileAuthorizationGrantStore(url: grantsURL)
+    let setupService = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await setupService.upsertVault(name: "Test", projectPath: "/tmp/project")
+    try await setupService.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "ai")
+
+    let service = try VaultService(
+        store: FileStateStore(url: stateURL),
+        authenticator: LocalAuthenticator(grantStore: grantStore, now: { now.addingTimeInterval(30) })
+    )
+    let subject = ApprovalSubject(request: ApprovalSubjectRequest(
+        capability: .readSecrets,
+        vaultID: vault.id,
+        keySet: ["OPENAI_API_KEY"],
+        destination: .file(try SecurePath.canonicalFilePath(targetURL.path)),
+        requester: "agent:codex",
+        command: "export"
+    ))
+    _ = try grantStore.approve(ApprovalRequest(subject: subject, ttl: 60), at: now)
+
+    _ = try await service.exportDotenv(vaultID: vault.id, toFile: targetURL.path, keys: ["OPENAI_API_KEY"], requester: "agent:codex")
+
+    #expect(try String(contentsOf: targetURL, encoding: .utf8).contains("OPENAI_API_KEY=sk-test"))
+}
+
+@Test func fileApprovalDestinationsUseCanonicalAbsolutePaths() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let previousDirectory = FileManager.default.currentDirectoryPath
+    defer {
+        FileManager.default.changeCurrentDirectoryPath(previousDirectory)
+    }
+
+    FileManager.default.changeCurrentDirectoryPath(directory.path)
+    let canonicalPath = try SecurePath.canonicalFilePath(".env")
+
+    #expect(canonicalPath == directory.appendingPathComponent(".env").path)
+    #expect(canonicalPath.hasPrefix("/"))
 }
 
 @Test func auditEventsAreDurableAndRedactedForSecretOperations() async throws {
@@ -624,6 +694,20 @@ import Testing
     #expect(files[0].variables.map(\.key) == ["APP_KEY"])
 }
 
+@Test func approvedScanSkipsSymlinkedDotenvFiles() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let outsideDotenv = outside.appendingPathComponent(".env")
+    try "OUTSIDE_KEY=secret\n".write(to: outsideDotenv, atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(at: root.appendingPathComponent(".env"), withDestinationURL: outsideDotenv)
+
+    let files = try DotenvCodec.scanApprovedDirectory(inDirectory: root.path)
+
+    #expect(files.isEmpty)
+}
+
 @Test func recursiveScanResolvesProjectRootFromMarkers() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     let project = root.appendingPathComponent("Project", isDirectory: true)
@@ -641,6 +725,7 @@ import Testing
 @Test func newProjectVaultWritesDotenvFile() async throws {
     let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
     let parentURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
     let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
 
     let vault = try await service.createProjectVault(name: "ExampleApp", parentDirectory: parentURL.path)
@@ -649,6 +734,20 @@ import Testing
     let dotenvURL = parentURL.appendingPathComponent("ExampleApp").appendingPathComponent(".env")
     let dotenv = try String(contentsOf: dotenvURL, encoding: .utf8)
     #expect(dotenv.contains("OPENAI_API_KEY=sk-test"))
+}
+
+@Test func newProjectVaultRejectsPathSeparatorNames() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let parentURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+
+    do {
+        _ = try await service.createProjectVault(name: "../Escaped", parentDirectory: parentURL.path)
+        Issue.record("Project names should not be able to escape the selected parent directory.")
+    } catch {
+        #expect(error.localizedDescription.contains("single folder name"))
+    }
 }
 
 @Test func setVariableAppendsToTrackedDotenvWithoutRewritingUnmanagedContent() async throws {
@@ -665,6 +764,29 @@ import Testing
     #expect(dotenv.contains("# owner note\n"))
     #expect(dotenv.contains("UNMANAGED=keep\n"))
     #expect(dotenv.hasSuffix("OPENAI_API_KEY=\"sk test\"\n"))
+}
+
+@Test func trackedDotenvWriteRejectsSymlinkTargets() async throws {
+    let stateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let outsideURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outsideURL, withIntermediateDirectories: true)
+    let outsideDotenv = outsideURL.appendingPathComponent(".env")
+    try "OUTSIDE_KEY=keep\n".write(to: outsideDotenv, atomically: true, encoding: .utf8)
+    try FileManager.default.createSymbolicLink(at: projectURL.appendingPathComponent(".env"), withDestinationURL: outsideDotenv)
+    let service = try VaultService(store: FileStateStore(url: stateURL), authenticator: NoopAuthenticator())
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path, dotenvFileName: ".env")
+
+    do {
+        try await service.setVariable(vaultID: vault.id, key: "OPENAI_API_KEY", value: "sk-test", scope: "project")
+        Issue.record("Tracked dotenv writes should reject symlink targets.")
+    } catch {
+        #expect(error.localizedDescription.contains("Tracked dotenv file must be a regular file"))
+    }
+
+    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: projectURL.appendingPathComponent(".env").path) == outsideDotenv.path)
+    #expect(try String(contentsOf: outsideDotenv, encoding: .utf8) == "OUTSIDE_KEY=keep\n")
 }
 
 @Test func updateVariableRenamesTrackedDotenvAssignment() async throws {
@@ -755,7 +877,7 @@ import Testing
     #expect(try Data(contentsOf: dotenvURL) == Data([0xff, 0xfe, 0xfd]))
 }
 
-@Test func authorizationGrantExpiresAndWriteImpliesRead() throws {
+@Test func authorizationGrantExpiresAndRequiresExactCapability() throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
     let store = FileAuthorizationGrantStore(url: url)
     let now = Date(timeIntervalSince1970: 1_000)
@@ -763,7 +885,7 @@ import Testing
     _ = try store.approve(.writeSecrets, ttl: 60, at: now)
 
     #expect(try store.hasValidGrant(for: .writeSecrets, at: now.addingTimeInterval(30)))
-    #expect(try store.hasValidGrant(for: .readSecrets, at: now.addingTimeInterval(30)))
+    #expect(!(try store.hasValidGrant(for: .readSecrets, at: now.addingTimeInterval(30))))
     #expect(!(try store.hasValidGrant(for: .writeSecrets, at: now.addingTimeInterval(61))))
 }
 
@@ -819,8 +941,11 @@ import Testing
     try store.saveMetadata(state)
     let loaded = try store.loadMetadata()
     let rawMetadata = try String(contentsOf: metadataURL, encoding: .utf8)
+    let attributes = try FileManager.default.attributesOfItem(atPath: metadataURL.path)
+    let permissions = try #require(attributes[.posixPermissions] as? NSNumber)
 
     #expect(FileManager.default.fileExists(atPath: metadataURL.path))
+    #expect(permissions.intValue & 0o077 == 0)
     #expect(loaded.vaults[0].variables[0].key == "OPENAI_API_KEY")
     #expect(loaded.vaults[0].variables[0].value == "")
     #expect(loaded.secrets.isEmpty)

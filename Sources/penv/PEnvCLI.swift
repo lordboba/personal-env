@@ -156,13 +156,11 @@ struct PEnvCLI {
             try? FileManager.default.removeItem(at: directory)
         }
 
+        let editorArguments = try parseEditorCommand(editor, filePath: fileURL.path)
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-lc", "exec $EDITOR_COMMAND \"$SECRET_FILE\""]
-        var environment = ProcessInfo.processInfo.environment
-        environment["EDITOR_COMMAND"] = editor
-        environment["SECRET_FILE"] = fileURL.path
-        process.environment = environment
+        process.executableURL = URL(fileURLWithPath: editorArguments.executable)
+        process.arguments = editorArguments.arguments
+        process.environment = ProcessInfo.processInfo.environment
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
@@ -262,7 +260,7 @@ struct PEnvCLI {
                 guard valueIndex < args.count else {
                     throw PersonalEnvError.invalidRequest("Missing value for --to-file.")
                 }
-                destination = .file(NSString(string: args[valueIndex]).expandingTildeInPath)
+                destination = .file(try SecurePath.canonicalFilePath(args[valueIndex]))
                 index += 2
             case "--stdout":
                 guard destination == nil else {
@@ -302,14 +300,14 @@ struct PEnvCLI {
         }
 
         return ApprovalRequest(
-            subject: ApprovalSubject(
+            subject: ApprovalSubject(request: ApprovalSubjectRequest(
                 capability: capability,
                 vaultID: vaultID,
                 keySet: keys,
                 destination: destination,
                 requester: requester,
                 command: command
-            ),
+            )),
             ttl: ttl
         )
     }
@@ -406,12 +404,93 @@ struct PEnvCLI {
             details["destination"] = describe(destination)
         }
         if let requester = subject.requester {
-            details["requester"] = requester
+            details["requester"] = requester.value
         }
         if let command = subject.command {
             details["command"] = command
         }
         return details
+    }
+
+    private static func parseEditorCommand(_ editor: String, filePath: String) throws -> (executable: String, arguments: [String]) {
+        let parts = try splitEditorCommand(editor)
+        guard let executable = parts.first, !executable.isEmpty else {
+            throw PersonalEnvError.invalidRequest("Set VISUAL or EDITOR to an executable path before using --editor.")
+        }
+        guard parts.allSatisfy({ !$0.contains(where: isShellControlCharacter) }) else {
+            throw PersonalEnvError.invalidRequest("VISUAL or EDITOR must name an executable and arguments, not shell syntax.")
+        }
+        let executablePath: String
+        if executable.contains("/") {
+            executablePath = executable
+        } else if let resolved = resolveExecutableOnPATH(executable) {
+            executablePath = resolved
+        } else {
+            throw PersonalEnvError.invalidRequest("Editor executable was not found on PATH: \(executable)")
+        }
+        return (executablePath, Array(parts.dropFirst()) + [filePath])
+    }
+
+    private static func splitEditorCommand(_ command: String) throws -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var quote: Character?
+        var escaping = false
+
+        for character in command {
+            if escaping {
+                current.append(character)
+                escaping = false
+                continue
+            }
+            if character == "\\" {
+                escaping = true
+                continue
+            }
+            if let activeQuote = quote {
+                if character == activeQuote {
+                    quote = nil
+                } else {
+                    current.append(character)
+                }
+                continue
+            }
+            if character == "\"" || character == "'" {
+                quote = character
+                continue
+            }
+            if character.isWhitespace {
+                if !current.isEmpty {
+                    parts.append(current)
+                    current = ""
+                }
+                continue
+            }
+            current.append(character)
+        }
+
+        guard quote == nil, !escaping else {
+            throw PersonalEnvError.invalidRequest("VISUAL or EDITOR contains unterminated quoting or escaping.")
+        }
+        if !current.isEmpty {
+            parts.append(current)
+        }
+        return parts
+    }
+
+    private static func isShellControlCharacter(_ character: Character) -> Bool {
+        character == ";" || character == "|" || character == "&" || character == "`" || character == "$" || character == ">" || character == "<"
+    }
+
+    private static func resolveExecutableOnPATH(_ name: String) -> String? {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        for directory in path.split(separator: ":").map(String.init) {
+            let candidate = URL(fileURLWithPath: directory).appendingPathComponent(name).path
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
     }
 }
 

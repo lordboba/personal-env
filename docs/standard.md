@@ -29,7 +29,7 @@ An approval subject is exact and redacted:
 - `command`: optional operation name such as `export`.
 - `expiry`: required TTL on every grant.
 
-Scoped agent transfers must match the approved subject exactly. A broad write approval can authorize broad reads, but it does not authorize a different scoped destination or key set.
+Scoped agent transfers must match the approved subject exactly. Write approvals do not authorize reads or exports.
 
 ## CLI Guarantees
 

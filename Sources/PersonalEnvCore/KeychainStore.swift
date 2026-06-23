@@ -109,8 +109,11 @@ public final class KeychainStore: SecretStoring, @unchecked Sendable {
 
     public func saveMetadata(_ state: AppState) throws {
         let data = try encoder.encode(state.redactedForMetadata())
-        try FileManager.default.createDirectory(at: metadataURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let directoryURL = metadataURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
         try data.write(to: metadataURL, options: [.atomic])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: metadataURL.path)
     }
 
     private func baseQuery(account: String) -> [String: Any] {
@@ -169,12 +172,7 @@ public final class KeychainAuthorizationGrantStore: AuthorizationGrantStoring, @
     public func saveGrants(_ grants: [AuthorizationGrant]) throws {
         let data = try encoder.encode(grants)
         let query = baseQuery()
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            kSecAttrLabel as String: itemLabel,
-            kSecAttrDescription as String: operationPrompt
-        ]
+        let attributes = try KeychainItemProtection.protectedAttributes(data: data, label: itemLabel, description: operationPrompt)
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if updateStatus == errSecSuccess {

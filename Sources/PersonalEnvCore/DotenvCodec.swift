@@ -178,12 +178,11 @@ public enum DotenvCodec {
     }
 
     public static func scanFiles(inDirectory directoryPath: String) throws -> [DetectedDotenvFile] {
-        let expandedPath = NSString(string: directoryPath).expandingTildeInPath
-        let directoryURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        let directoryURL = URL(fileURLWithPath: try SecurePath.canonicalDirectoryPath(directoryPath), isDirectory: true)
 
         return try supportedFileNames.compactMap { fileName in
             let url = directoryURL.appendingPathComponent(fileName)
-            guard FileManager.default.fileExists(atPath: url.path) else {
+            guard FileManager.default.fileExists(atPath: url.path), try isSafeDotenvFile(url) else {
                 return nil
             }
             let text = try String(contentsOf: url, encoding: .utf8)
@@ -226,8 +225,7 @@ public enum DotenvCodec {
         options: DotenvScanOptions,
         progress: (@Sendable (DotenvScanProgress) -> Void)? = nil
     ) throws -> [DetectedDotenvFile] {
-        let expandedPath = NSString(string: directoryPath).expandingTildeInPath
-        let rootURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        let rootURL = URL(fileURLWithPath: try SecurePath.canonicalDirectoryPath(directoryPath), isDirectory: true)
         let policy = DotenvScanPolicy()
         try policy.validate(rootURL, approval: options.approval)
 
@@ -276,6 +274,10 @@ public enum DotenvCodec {
                 continue
             }
             guard supportedFileNames.contains(name) else { continue }
+            guard try isSafeDotenvFile(url) else {
+                skippedItemCount += 1
+                continue
+            }
             guard let text = try? String(contentsOf: url, encoding: .utf8) else {
                 skippedItemCount += 1
                 continue
@@ -332,6 +334,11 @@ public enum DotenvCodec {
         }
 
         return fallback
+    }
+
+    private static func isSafeDotenvFile(_ url: URL) throws -> Bool {
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        return values.isRegularFile == true && values.isSymbolicLink != true
     }
 
     private static func publishProgress(
