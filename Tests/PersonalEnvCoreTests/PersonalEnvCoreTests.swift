@@ -547,8 +547,10 @@ import Testing
 
 @Test func repeatedImportsGarbageCollectReplacedSecretRecords() async throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+    let projectURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: projectURL, withIntermediateDirectories: true)
     let service = try VaultService(store: FileStateStore(url: url), authenticator: NoopAuthenticator())
-    let vault = try await service.upsertVault(name: "Test", projectPath: "/tmp/project", dotenvFileName: ".env")
+    let vault = try await service.upsertVault(name: "Test", projectPath: projectURL.path, dotenvFileName: ".env")
 
     try await service.importVariables([
         EnvVariable(key: "OPENAI_API_KEY", value: "first", scope: "project")
